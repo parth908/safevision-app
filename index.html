@@ -30,7 +30,7 @@
             left: 0;
             width: 100%;
             height: 100%;
-            object-fit: cover; /* Ensures video covers screen without distortion */
+            object-fit: contain; /* CHANGED: Ensures entire video fits within screen, may have black bars */
             transform: scaleX(-1); /* Mirror camera feed for selfie view (common for front camera) */
             /* If using rear camera and want normal view, remove 'transform: scaleX(-1);' */
             display: none; /* Hidden by default until loaded */
