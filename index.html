@@ -30,7 +30,7 @@
             left: 0;
             width: 100%;
             height: 100%;
-            object-fit: contain; /* CHANGED: Ensures entire video fits within screen, may have black bars */
+            object-fit: contain; /* Ensures entire video fits within screen, may have black bars */
             transform: scaleX(-1); /* Mirror camera feed for selfie view (common for front camera) */
             /* If using rear camera and want normal view, remove 'transform: scaleX(-1);' */
             display: none; /* Hidden by default until loaded */
@@ -59,6 +59,7 @@
             text-overflow: ellipsis;
             max-width: 90%;
             z-index: 5;
+            display: none; /* NEW: Hidden by default */
         }
         .warning-text {
             color: red; /* Red for warnings */
@@ -69,7 +70,7 @@
     <video id="webcam" autoplay playsinline muted></video>
     <canvas id="canvas"></canvas>
     <div id="loadingMessage">Loading AI model... Please wait.</div>
-    <div id="statusMessage" style="display: none;">App Ready</div> <script>
+    <div id="statusMessage"></div> <script>
         const video = document.getElementById('webcam');
         const canvas = document.getElementById('canvas');
         const ctx = canvas.getContext('2d');
@@ -108,8 +109,20 @@
         // --- Text-to-Speech Function ---
         // Handles speaking and cooldown to prevent rapid alerts
         function speak(text) {
+            console.log("Attempting to speak:", text); // Debugging log
+
             // Prevent new speech if already speaking or within cooldown period
             if (speechSynth.speaking || isSpeaking || (Date.now() - lastSpeechTime < SPEECH_COOLDOWN)) {
+                console.log("Speech blocked due to cooldown or already speaking:", text); // Debugging log
+                return;
+            }
+
+            // Check if any voices are available
+            if (speechSynth.getVoices().length === 0) {
+                console.warn("No speech synthesis voices available. Speech will not work.");
+                // You could uncomment the line below to display a message on screen if speech is unavailable
+                // statusMessage.innerText = "Speech not available (no voices)";
+                // statusMessage.style.display = 'block';
                 return;
             }
 
@@ -129,16 +142,13 @@
             };
 
             // Attempt to speak. On mobile, the very first speech might be blocked
-            // if no prior user interaction (like a tap) has occurred.
-            // However, removing the "click anywhere" prompt is the primary goal.
+            // if no prior user interaction has occurred. Subsequent speech might work.
             speechSynth.speak(utterance);
         }
 
         // --- Camera Setup ---
         async function setupWebcam() {
             try {
-                // Request camera stream. 'environment' for rear camera, 'user' for front.
-                // Requesting ideal resolution to balance quality and performance.
                 const stream = await navigator.mediaDevices.getUserMedia({
                     video: {
                         facingMode: 'environment', // Use rear camera (usually better for object detection)
@@ -150,7 +160,6 @@
 
                 return new Promise((resolve) => {
                     video.onloadedmetadata = () => {
-                        // Set canvas dimensions to match video stream's actual dimensions
                         canvas.width = video.videoWidth;
                         canvas.height = video.videoHeight;
                         video.style.display = 'block'; // Show video once loaded
@@ -161,7 +170,7 @@
             } catch (error) {
                 console.error("Error accessing camera:", error);
                 loadingMessage.innerText = "Error: Camera access denied or not available. Please allow camera permissions in your device settings and refresh.";
-                speak("Camera access denied. Please check permissions.");
+                // Don't use speak() here if it's the very first call, as it might be blocked.
                 alert("Camera access denied or not available. Please allow camera permissions in your device settings and refresh the page.");
                 return null; // Return null if camera setup fails
             }
@@ -170,122 +179,106 @@
         // --- Load Model and Start Detection Loop ---
         async function loadModelAndStartDetection() {
             loadingMessage.innerText = "Loading AI model... This might take a moment depending on your internet speed.";
-            statusMessage.style.display = 'none'; // Hide initial status until model is ready
+            statusMessage.style.display = 'none'; // Ensure status message is hidden during loading
 
             try {
-                // Load the COCO-SSD model. Using 'lite_mobilenet_v2' base model for better mobile performance.
                 model = await cocoSsd.load({base: 'lite_mobilenet_v2'});
                 loadingMessage.style.display = 'none'; // Hide loading message once model is loaded
-                statusMessage.style.display = 'block'; // Show status message area
 
                 const webcamStream = await setupWebcam();
                 if (webcamStream) {
                     video.play(); // Ensure video is playing
-                    speak("App ready. Person detection active."); // Initial spoken message
+                    // Initial app ready message will NOT be spoken, to keep silent by default
+                    // Speak only for warnings later.
                     detectFrame(); // Start the continuous detection loop
                 }
             } catch (error) {
                 console.error("Error loading model or starting camera:", error);
                 loadingMessage.innerText = "Fatal Error: Could not load AI model or start camera. Check browser console for details.";
-                speak("Fatal error. Could not load app.");
+                // Don't use speak() here either, rely on visual error for critical failures.
             }
         }
 
         // --- Main Detection Loop ---
         async function detectFrame() {
-            if (video.readyState < 2) { // Ensure video is fully loaded and ready
+            if (video.readyState < 2) {
                 requestAnimationFrame(detectFrame);
                 return;
             }
 
-            // --- Frame Skipping Logic ---
-            // Only process a frame every FRAMES_TO_SKIP + 1 iterations
             frameCount++;
             if (frameCount % (FRAMES_TO_SKIP + 1) !== 0) {
-                requestAnimationFrame(detectFrame); // Request next frame without processing
+                requestAnimationFrame(detectFrame);
                 return;
             }
 
-            // --- AI Model Inference and Drawing (within tf.tidy for automatic memory management) ---
-            // tf.tidy ensures that all intermediate tensors created within this function
-            // are disposed of automatically after the function completes, preventing memory leaks.
             tf.tidy(async () => {
                 let predictions;
                 try {
-                    // Make sure model is loaded before attempting detection
                     if (model) {
-                         predictions = await model.detect(video); // Perform detection on the current video frame
+                         predictions = await model.detect(video);
                     } else {
-                         // Model not yet loaded or failed, skip detection for this frame
                          requestAnimationFrame(detectFrame);
                          return;
                     }
                 } catch (e) {
                     console.error("Error during model detection:", e);
-                    requestAnimationFrame(detectFrame); // Continue trying on next frame
+                    requestAnimationFrame(detectFrame);
                     return;
                 }
 
-                ctx.clearRect(0, 0, canvas.width, canvas.height); // Clear previous drawings on canvas
-                // Draw the current video frame onto the canvas. This is what the user sees.
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
                 ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
                 let personDetected = false;
                 let isPersonClose = false;
 
-                // Iterate over all detected objects
                 predictions.forEach(prediction => {
-                    // Check if the detected object is a 'person' and if the confidence score is high enough
-                    if (prediction.class === 'person' && prediction.score > 0.6) { // 60% confidence threshold
+                    if (prediction.class === 'person' && prediction.score > 0.6) {
                         personDetected = true;
-                        const [x, y, width, height] = prediction.bbox; // Get bounding box coordinates and dimensions
+                        const [x, y, width, height] = prediction.bbox;
 
-                        // --- Drawing Bounding Box and Label ---
-                        // Draw a green rectangle around the detected person
                         ctx.strokeStyle = 'lime';
                         ctx.lineWidth = 2;
                         ctx.strokeRect(x, y, width, height);
 
-                        // Draw text label (e.g., "Person (95%)")
                         ctx.fillStyle = 'lime';
                         ctx.font = '16px sans-serif';
-                        // Position text just above the box, or at the top of canvas if box is too high
                         ctx.fillText(`Person (${Math.round(prediction.score * 100)}%)`, x, y > 10 ? y - 5 : 10);
 
-                        // --- Proximity Warning Logic ---
-                        // If the height of the bounding box is greater than the defined threshold,
-                        // it indicates the person is very close to the camera.
                         if (height > PROXIMITY_THRESHOLD_HEIGHT) {
                             isPersonClose = true;
-                            // Change drawing style for the "very close" warning
                             ctx.strokeStyle = 'red';
                             ctx.lineWidth = 4;
-                            ctx.strokeRect(x, y, width, height); // Draw a thicker red box
+                            ctx.strokeRect(x, y, width, height);
                             ctx.fillStyle = 'red';
-                            ctx.fillText(`VERY CLOSE!`, x, y + height + 20); // Add "VERY CLOSE!" text below box
+                            ctx.fillText(`VERY CLOSE!`, x, y + height + 20);
                         }
                     }
                 });
 
                 // --- Update Status Message and Play Voice Alerts ---
                 if (isPersonClose) {
-                    statusMessage.className = 'warning-text'; // Apply CSS class for red text
+                    statusMessage.className = 'warning-text';
                     statusMessage.innerText = "WARNING: Person is very close!";
+                    statusMessage.style.display = 'block'; // Show message
                     speak("Warning: Person very close.");
                 } else if (personDetected) {
-                    statusMessage.className = ''; // Remove warning class if not close
+                    statusMessage.className = '';
                     statusMessage.innerText = "Person detected.";
+                    statusMessage.style.display = 'block'; // Show message
+                    // No speech for simple detection
                 } else {
-                    statusMessage.className = ''; // No warning, no person
-                    statusMessage.innerText = "No person detected.";
+                    statusMessage.className = '';
+                    statusMessage.innerText = ""; // Clear text
+                    statusMessage.style.display = 'none'; // Hide message completely
+                    // No speech when no person is detected
                 }
-            }); // End of tf.tidy() block – all tensors created inside are automatically disposed.
+            });
 
-            // Request the next animation frame to continue the detection loop
             requestAnimationFrame(detectFrame);
         }
 
-        // --- Start the application automatically when the DOM is fully loaded ---
         document.addEventListener('DOMContentLoaded', loadModelAndStartDetection);
     </script>
 </body>
