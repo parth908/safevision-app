@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <title>SafeVision - Surroundings, Time, Weather, Proximity, & Speech</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <link rel="manifest" href="/manifest.json">
+    <style>
+        body {
+            margin: 0;
+            background-color: #111;
+            color: white;
+            text-align: center;
+            font-family: sans-serif;
+        }
+        h2 {
+            margin-top: 20px;
+        }
+        #container {
+            position: relative;
+            display: inline-block;
+        }
+        video, canvas {
+            width: 320px;
+            height: auto;
+            border: 4px solid #0f0;
+            border-radius: 12px;
+        }
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+        #objectLabel, #contextualInfo {
+            margin-top: 10px;
+            font-size: 20px;
+            color: #0f0;
+        }
+        #contextualInfo {
+            margin-bottom: 10px;
+            color: #0ff; /* Cyan for contextual info */
+        }
+        /* Styles for the speech enable overlay */
+        #speechEnableOverlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.9); /* Dark overlay */
+            color: white;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            font-size: 24px;
+            cursor: pointer; /* Indicates it's clickable */
+            z-index: 9999; /* Ensure it's on top of everything */
+            text-align: center;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+        #speechEnableOverlay small {
+            margin-top: 10px;
+            font-size: 16px;
+            opacity: 0.8;
+        }
+    </style>
+</head>
+<body>
+    <h2>Welcome to SafeVision</h2>
+    <div id="container">
+        <video id="webcam" autoplay muted playsinline></video>
+        <canvas id="canvas"></canvas>
+    </div>
+    <div id="objectLabel">Detecting surroundings...</div>
+    <div id="contextualInfo">Loading contextual information...</div>
+
+    <div id="speechEnableOverlay">
+        Click anywhere on this page to enable voice alerts
+        <br><br>
+        <small>(You only need to do this once per session)</small>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.11.0"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.2"></script>
+
+    <script>
+        const video = document.getElementById('webcam');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const objectLabel = document.getElementById('objectLabel');
+        const contextualInfoDisplay = document.getElementById('contextualInfo');
+
+        let cocoSsdModel;
+        let lastDetectedObjects = []; // Keep track of objects for the summary
+
+        // --- Proximity Alert Configuration ---
+        const PROXIMITY_THRESHOLD_PERCENT = 0.7; // Object considered "close" if it occupies 70% or more of the screen width/height
+        const PROXIMITY_COOLDOWN_MS = 3000; // 3 seconds cooldown for proximity alerts per object class
+        const lastProximityAlertTime = new Map(); // Tracks last alert time for each object class
+
+        // --- Global Cooldown for All Immediate Alerts ---
+        let lastGeneralAlertSpeakTime = 0; // Tracks when the last immediate (non-summary) alert was spoken
+        const GENERAL_ALERT_COOLDOWN_MS = 5000; // 5 seconds cooldown between any immediate alerts
+
+        // --- Speak function ---
+        function speak(text) {
+            const synth = window.speechSynthesis;
+            if (synth.speaking) {
+                synth.cancel(); // Cancel any ongoing speech to prioritize the new message
+            }
+            const utter = new SpeechSynthesisUtterance(text);
+            utter.lang = 'en-US';
+            utter.onerror = (event) => { console.error("SpeechSynthesisUtterance error:", event); };
+            synth.speak(utter);
+        }
+        // --- END Speak function ---
+
+        async function setupCamera() {
+            try {
+                // Ensure audio is false, as we are not using the microphone
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { width: 320, height: 240 },
+                    audio: false
+                });
+                video.srcObject = stream;
+                return new Promise((resolve) => {
+                    video.onloadedmetadata = () => {
+                        video.play();
+                        resolve(video);
+                    };
+                });
+            } catch (error) {
+                console.error("Error setting up camera:", error);
+                alert("Camera access denied or failed: " + error.message + ". Please ensure your webcam is connected and allowed by your browser.");
+                return null;
+            }
+        }
+
+        // Removed: setupMicrophoneAndStartSoundDetection function
+
+        async function getWeatherData() {
+            try {
+                const position = await new Promise((resolve, reject) => {
+                    navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: false, timeout: 5000, maximumAge: Infinity });
+                });
+                const lat = position.coords.latitude;
+                const lon = position.coords.longitude;
+
+                const weatherApiUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true&temperature_unit=celsius&windspeed_unit=kmh&precipitation_unit=mm`;
+                const response = await fetch(weatherApiUrl);
+                const data = await response.json();
+
+                if (data.current_weather) {
+                    const temp = data.current_weather.temperature;
+                    const wind = data.current_weather.windspeed;
+                    const weatherCode = data.current_weather.weathercode;
+                    let weatherDescription = "unknown weather conditions.";
+
+                    if (weatherCode >= 0 && weatherCode <= 3) weatherDescription = "clear or partly cloudy skies.";
+                    else if (weatherCode >= 45 && weatherCode <= 48) weatherDescription = "foggy conditions.";
+                    else if (weatherCode >= 51 && weatherCode <= 67) weatherDescription = "drizzling or raining.";
+                    else if (weatherCode >= 71 && weatherCode <= 75) weatherDescription = "snowing.";
+                    else if (weatherCode >= 95 && weatherCode <= 99) weatherDescription = "thunderstorming.";
+
+                    return `The temperature is ${temp} degrees Celsius with ${wind} kilometers per hour wind. Expect ${weatherDescription}`;
+                }
+                return "No current weather data available.";
+            } catch (error) {
+                console.warn("Weather API error:", error);
+                if (error.code === error.PERMISSION_DENIED) {
+                    return "Could not retrieve weather information due to denied location access.";
+                } else if (error.code === error.POSITION_UNAVAILABLE) {
+                    return "Could not retrieve weather information as location is unavailable.";
+                }
+                return "Could not retrieve weather information.";
+            }
+        }
+
+        // Function to combine and announce all current information
+        async function announceAllInformation() {
+            let summary = "";
+
+            // 1. Current Time and Date
+            const dateTimeOptions = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: 'numeric' };
+            summary += `It is ${new Date().toLocaleDateString('en-US', dateTimeOptions)}. `;
+
+            // 2. Detected Objects (just for the summary)
+            if (lastDetectedObjects.length > 0) {
+                const uniqueObjects = [...new Set(lastDetectedObjects)];
+                summary += `Around you, I see: ${uniqueObjects.join(", ")}. `;
+            } else {
+                summary += `I don't see any prominent objects at the moment. `;
+            }
+
+            // 3. Weather
+            const weatherInfo = await getWeatherData(); // Fetch fresh weather data
+            summary += `Weather update: ${weatherInfo}.`;
+
+            speak(summary); // Speak the summary
+            contextualInfoDisplay.innerText = summary; // Update display with summary too
+        }
+
+        // This loop handles visual drawing of object detections and Proximity Alerts
+        async function detectionLoop() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+            if (cocoSsdModel) {
+                const objectPredictions = await cocoSsdModel.detect(video);
+                let currentObjectsForDisplay = [];
+                if (objectPredictions.length > 0) {
+                    objectPredictions.forEach(prediction => {
+                        const [x, y, width, height] = prediction.bbox;
+                        ctx.strokeStyle = "#0f0"; // Green for objects
+                        ctx.lineWidth = 2;
+                        ctx.strokeRect(x, y, width, height);
+
+                        ctx.fillStyle = "#0f0";
+                        ctx.font = "14px Arial";
+                        const text = `${prediction.class} (${Math.round(prediction.score * 100)}%)`;
+                        ctx.fillText(text, x + 5, y > 10 ? y - 5 : y + 15);
+                        currentObjectsForDisplay.push(prediction.class); // Collect for display
+
+                        // --- Proximity Alert Logic ---
+                        const isClose = (width / canvas.width > PROXIMITY_THRESHOLD_PERCENT || height / canvas.height > PROXIMITY_THRESHOLD_PERCENT);
+                        if (isClose) {
+                            // Check local cooldown for this specific object class
+                            if (Date.now() - (lastProximityAlertTime.get(prediction.class) || 0) > PROXIMITY_COOLDOWN_MS) {
+                                // Check Global Alert Cooldown
+                                if (Date.now() - lastGeneralAlertSpeakTime > GENERAL_ALERT_COOLDOWN_MS) {
+                                    console.log(`[Proximity Alert] ${prediction.class} is very close!`);
+                                    speak(`Warning! ${prediction.class} is very close!`);
+                                    lastProximityAlertTime.set(prediction.class, Date.now());
+                                    lastGeneralAlertSpeakTime = Date.now(); // Update global cooldown
+                                } else {
+                                    console.log(`[Proximity Alert Suppressed] Global cooldown active for ${prediction.class}`);
+                                }
+                            }
+                        }
+                        // --- END Proximity Alert Logic ---
+                    });
+                    objectLabel.innerText = "Detected objects: " + [...new Set(currentObjectsForDisplay)].join(", ");
+                } else {
+                    objectLabel.innerText = "Detecting surroundings...";
+                }
+                lastDetectedObjects = currentObjectsForDisplay; // Update the global variable for announcements
+            } else {
+                objectLabel.innerText = "Surroundings: COCO-SSD not loaded.";
+            }
+
+            requestAnimationFrame(detectionLoop);
+        }
+
+        // Function to enable speech and start main logic after user interaction
+        let speechEnabled = false;
+        function enableSpeech() {
+            if (!speechEnabled) {
+                speechEnabled = true;
+                const overlay = document.getElementById('speechEnableOverlay');
+                if (overlay) {
+                    overlay.style.display = 'none'; // Hide the overlay
+                }
+                // Now that speech is enabled by user click, start the main application
+                speak("Welcome to SafeVision. Setting up camera.");
+                main(); // Call main function here
+            }
+        }
+
+        // Add event listeners to the document to trigger enableSpeech on first click or touch
+        document.addEventListener('click', enableSpeech, { once: true });
+        document.addEventListener('touchend', enableSpeech, { once: true }); // For mobile devices
+
+
+        async function main() {
+            const cameraReady = await setupCamera();
+            if (!cameraReady) {
+                console.error("Camera setup failed. Exiting main.");
+                return;
+            }
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+
+            speak("Loading surroundings detection model.");
+            cocoSsdModel = await cocoSsd.load();
+            console.log('COCO-SSD model loaded successfully.');
+
+            // Removed: Microphone setup and sound detection block
+
+            speak("Starting automatic announcements every fifty seconds.");
+            setInterval(announceAllInformation, 50000); // Announce every 50 seconds
+            announceAllInformation(); // Initial announcement right away
+
+            speak("Starting visual detection.");
+            detectionLoop(); // Start the continuous visual detection and drawing loop
+        }
+
+        // --- PWA Service Worker Registration ---
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/service-worker.js')
+                    .then((registration) => {
+                        console.log('ServiceWorker registration successful with scope: ', registration.scope);
+                    })
+                    .catch((err) => {
+                        console.log('ServiceWorker registration failed: ', err);
+                    });
+            });
+        }
+        // --- END PWA Service Worker Registration ---
+    </script>
+</body>
+</html>
