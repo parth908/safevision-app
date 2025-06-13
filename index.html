@@ -59,7 +59,7 @@
             text-overflow: ellipsis;
             max-width: 90%;
             z-index: 5;
-            display: none; /* NEW: Hidden by default */
+            display: none; /* Hidden by default */
         }
         .warning-text {
             color: red; /* Red for warnings */
@@ -120,9 +120,6 @@
             // Check if any voices are available
             if (speechSynth.getVoices().length === 0) {
                 console.warn("No speech synthesis voices available. Speech will not work.");
-                // You could uncomment the line below to display a message on screen if speech is unavailable
-                // statusMessage.innerText = "Speech not available (no voices)";
-                // statusMessage.style.display = 'block';
                 return;
             }
 
@@ -141,8 +138,6 @@
                 isSpeaking = false;
             };
 
-            // Attempt to speak. On mobile, the very first speech might be blocked
-            // if no prior user interaction has occurred. Subsequent speech might work.
             speechSynth.speak(utterance);
         }
 
@@ -170,7 +165,6 @@
             } catch (error) {
                 console.error("Error accessing camera:", error);
                 loadingMessage.innerText = "Error: Camera access denied or not available. Please allow camera permissions in your device settings and refresh.";
-                // Don't use speak() here if it's the very first call, as it might be blocked.
                 alert("Camera access denied or not available. Please allow camera permissions in your device settings and refresh the page.");
                 return null; // Return null if camera setup fails
             }
@@ -188,14 +182,11 @@
                 const webcamStream = await setupWebcam();
                 if (webcamStream) {
                     video.play(); // Ensure video is playing
-                    // Initial app ready message will NOT be spoken, to keep silent by default
-                    // Speak only for warnings later.
                     detectFrame(); // Start the continuous detection loop
                 }
             } catch (error) {
                 console.error("Error loading model or starting camera:", error);
                 loadingMessage.innerText = "Fatal Error: Could not load AI model or start camera. Check browser console for details.";
-                // Don't use speak() here either, rely on visual error for critical failures.
             }
         }
 
@@ -212,21 +203,23 @@
                 return;
             }
 
-            tf.tidy(async () => {
-                let predictions;
-                try {
-                    if (model) {
-                         predictions = await model.detect(video);
-                    } else {
-                         requestAnimationFrame(detectFrame);
-                         return;
-                    }
-                } catch (e) {
-                    console.error("Error during model detection:", e);
+            let predictions;
+            try {
+                if (model) {
+                    // NEW: Perform detection OUTSIDE of tf.tidy
+                    predictions = await model.detect(video);
+                } else {
                     requestAnimationFrame(detectFrame);
                     return;
                 }
+            } catch (e) {
+                console.error("Error during model detection (outside tf.tidy):", e); // Log for debugging
+                requestAnimationFrame(detectFrame);
+                return;
+            }
 
+            // NEW: Use tf.tidy only for synchronous operations (drawing, status updates)
+            tf.tidy(() => {
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
                 ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
@@ -267,14 +260,12 @@
                     statusMessage.className = '';
                     statusMessage.innerText = "Person detected.";
                     statusMessage.style.display = 'block'; // Show message
-                    // No speech for simple detection
                 } else {
                     statusMessage.className = '';
                     statusMessage.innerText = ""; // Clear text
                     statusMessage.style.display = 'none'; // Hide message completely
-                    // No speech when no person is detected
                 }
-            });
+            }); // End of tf.tidy() block
 
             requestAnimationFrame(detectFrame);
         }
