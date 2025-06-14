@@ -62,28 +62,19 @@
         document.getElementById("weather").innerText = weatherData;
       });
 
-    // 🗣️ Speak Info
+    // 🗣️ Speak Info Every 50 Seconds
     function speakInfo(text) {
       const utterance = new SpeechSynthesisUtterance(text);
       utterance.lang = 'en-IN';
-      speechSynthesis.cancel();  // stop any current speech
+      speechSynthesis.cancel();
       speechSynthesis.speak(utterance);
     }
 
-    // 🔁 Speak Every 50 Seconds
     setInterval(() => {
       const now = new Date();
       const summary = `Today is ${now.toDateString()}, time is ${now.toLocaleTimeString()}. ${weatherData}`;
       speakInfo(summary);
-    }, 50000); // 50 seconds
-
-    // 🚨 Emergency Detection Mock (replace with your logic)
-    setInterval(() => {
-      const danger = Math.random() < 0.1; // 🔁 REPLACE with real condition!
-      if (danger) {
-        speakInfo("⚠️ Emergency detected. Please take immediate action.");
-      }
-    }, 3000); // check every 3 sec
+    }, 50000);
   </script>
 </body>
 </html>
