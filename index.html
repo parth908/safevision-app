@@ -1,276 +1,86 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>SafeVision App</title>
-    <link rel="manifest" href="manifest.json">
-    <meta name="theme-color" content="#000000"> <link rel="apple-touch-icon" href="icon-192.png">
-
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
-
-    <style>
-        body {
-            margin: 0;
-            padding: 0;
-            overflow: hidden; /* Hide scrollbars */
-            background-color: black;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
-            color: white;
-            font-family: sans-serif;
-            flex-direction: column;
-        }
-        #webcam, #canvas {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            object-fit: contain; /* Ensures entire video fits within screen, may have black bars */
-            transform: scaleX(-1); /* Mirror camera feed for selfie view (common for front camera) */
-            /* If using rear camera and want normal view, remove 'transform: scaleX(-1);' */
-            display: none; /* Hidden by default until loaded */
-        }
-        #loadingMessage {
-            position: absolute;
-            z-index: 10;
-            background: rgba(0, 0, 0, 0.7);
-            padding: 20px;
-            border-radius: 10px;
-            text-align: center;
-            font-size: 1.2em;
-        }
-        #statusMessage {
-            position: absolute;
-            bottom: 20px;
-            left: 50%;
-            transform: translateX(-50%);
-            background: rgba(0, 0, 0, 0.6);
-            padding: 10px 20px;
-            border-radius: 20px;
-            font-size: 1.1em;
-            color: limegreen; /* Green for normal status */
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            max-width: 90%;
-            z-index: 5;
-            display: none; /* Hidden by default */
-        }
-        .warning-text {
-            color: red; /* Red for warnings */
-        }
-    </style>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>SafeVision</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: #0f172a;
+      color: white;
+      text-align: center;
+      padding: 20px;
+    }
+    .card {
+      background: #1e293b;
+      padding: 20px;
+      margin: 10px auto;
+      border-radius: 12px;
+      max-width: 420px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    }
+    .title {
+      font-size: 24px;
+      margin-bottom: 10px;
+    }
+    .info {
+      margin: 10px 0;
+    }
+    button {
+      background-color: #3b82f6;
+      border: none;
+      padding: 12px 24px;
+      border-radius: 8px;
+      color: white;
+      font-size: 16px;
+      cursor: pointer;
+      margin-top: 20px;
+    }
+    button:hover {
+      background-color: #2563eb;
+    }
+  </style>
 </head>
 <body>
-    <video id="webcam" autoplay playsinline muted></video>
-    <canvas id="canvas"></canvas>
-    <div id="loadingMessage">Loading AI model... Please wait.</div>
-    <div id="statusMessage"></div> <script>
-        const video = document.getElementById('webcam');
-        const canvas = document.getElementById('canvas');
-        const ctx = canvas.getContext('2d');
-        const loadingMessage = document.getElementById('loadingMessage');
-        const statusMessage = document.getElementById('statusMessage');
 
-        let model;
-        let speechSynth = window.speechSynthesis;
-        let isSpeaking = false;
-        let lastSpeechTime = 0;
-        const SPEECH_COOLDOWN = 3000; // 3 seconds cooldown between voice alerts
+  <div class="card">
+    <div class="title">🌐 SafeVision Dashboard</div>
+    <div class="info" id="datetime">Loading time...</div>
+    <div class="info" id="weather">Loading weather...</div>
+    <button onclick="loadModel()">Start Emotion Detection</button>
+  </div>
 
-        // --- Performance Optimization Variables ---
-        let frameCount = 0;
-        const FRAMES_TO_SKIP = 2; // Process every 3rd frame (0, 1, 2 -> process 2)
+  <script>
+    // 📅 Date & Time
+    function updateDateTime() {
+      const now = new Date();
+      const dateOptions = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
+      const time = now.toLocaleTimeString();
+      document.getElementById("datetime").innerText =
+        `${now.toLocaleDateString(undefined, dateOptions)}\n${time}`;
+    }
+    setInterval(updateDateTime, 1000);
+    updateDateTime();
 
-        // --- Proximity Warning Threshold (Adjust this value) ---
-        // Increase this number to make the "person is very close" warning trigger when the person is physically closer.
-        // A value of 450-600 might be a good starting point for a typical phone orientation.
-        // You'll need to experiment with this based on your camera and typical usage distance.
-        const PROXIMITY_THRESHOLD_HEIGHT = 450; // Example: If person's bounding box height > 450px, trigger warning
+    // 🌤️ Free Weather from wttr.in
+    fetch("https://wttr.in/?format=%C+🌡️+%t+💨+%w")
+      .then(response => response.text())
+      .then(data => {
+        document.getElementById("weather").innerText = "Weather: " + data;
+      })
+      .catch(() => {
+        document.getElementById("weather").innerText = "Weather info not available.";
+      });
 
-        // --- PWA Service Worker Registration ---
-        if ('serviceWorker' in navigator) {
-            window.addEventListener('load', () => {
-                navigator.serviceWorker.register('service-worker.js')
-                    .then(registration => {
-                        console.log('Service Worker registered! Scope:', registration.scope);
-                    })
-                    .catch(err => {
-                        console.log('Service Worker registration failed:', err);
-                    });
-            });
-        }
+    // 🤖 AI Model Loader (placeholder)
+    function loadModel() {
+      alert("Model loading started. Insert your model loading code here.");
+      // Example:
+      // const model = await tmImage.load('model.json', 'metadata.json');
+    }
+  </script>
 
-        // --- Text-to-Speech Function ---
-        // Handles speaking and cooldown to prevent rapid alerts
-        function speak(text) {
-            console.log("Attempting to speak:", text); // Debugging log
-
-            // Prevent new speech if already speaking or within cooldown period
-            if (speechSynth.speaking || isSpeaking || (Date.now() - lastSpeechTime < SPEECH_COOLDOWN)) {
-                console.log("Speech blocked due to cooldown or already speaking:", text); // Debugging log
-                return;
-            }
-
-            // Check if any voices are available
-            if (speechSynth.getVoices().length === 0) {
-                console.warn("No speech synthesis voices available. Speech will not work.");
-                return;
-            }
-
-            const utterance = new SpeechSynthesisUtterance(text);
-            utterance.rate = 1.0; // Normal speed (1.0 is default, can be 0.1 to 10)
-            utterance.pitch = 1.0; // Normal pitch (1.0 is default, can be 0 to 2)
-            utterance.volume = 1.0; // Full volume (1.0 is default, can be 0 to 1)
-
-            utterance.onstart = () => { isSpeaking = true; };
-            utterance.onend = () => {
-                isSpeaking = false;
-                lastSpeechTime = Date.now();
-            };
-            utterance.onerror = (event) => {
-                console.error('SpeechSynthesisUtterance.onerror', event);
-                isSpeaking = false;
-            };
-
-            speechSynth.speak(utterance);
-        }
-
-        // --- Camera Setup ---
-        async function setupWebcam() {
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({
-                    video: {
-                        facingMode: 'environment', // Use rear camera (usually better for object detection)
-                        width: { ideal: 640 }, // Try to get 640px width
-                        height: { ideal: 480 } // Try to get 480px height
-                    }
-                });
-                video.srcObject = stream;
-
-                return new Promise((resolve) => {
-                    video.onloadedmetadata = () => {
-                        canvas.width = video.videoWidth;
-                        canvas.height = video.videoHeight;
-                        video.style.display = 'block'; // Show video once loaded
-                        canvas.style.display = 'block'; // Show canvas once loaded
-                        resolve(video);
-                    };
-                });
-            } catch (error) {
-                console.error("Error accessing camera:", error);
-                loadingMessage.innerText = "Error: Camera access denied or not available. Please allow camera permissions in your device settings and refresh.";
-                alert("Camera access denied or not available. Please allow camera permissions in your device settings and refresh the page.");
-                return null; // Return null if camera setup fails
-            }
-        }
-
-        // --- Load Model and Start Detection Loop ---
-        async function loadModelAndStartDetection() {
-            loadingMessage.innerText = "Loading AI model... This might take a moment depending on your internet speed.";
-            statusMessage.style.display = 'none'; // Ensure status message is hidden during loading
-
-            try {
-                model = await cocoSsd.load({base: 'lite_mobilenet_v2'});
-                loadingMessage.style.display = 'none'; // Hide loading message once model is loaded
-
-                const webcamStream = await setupWebcam();
-                if (webcamStream) {
-                    video.play(); // Ensure video is playing
-                    detectFrame(); // Start the continuous detection loop
-                }
-            } catch (error) {
-                console.error("Error loading model or starting camera:", error);
-                loadingMessage.innerText = "Fatal Error: Could not load AI model or start camera. Check browser console for details.";
-            }
-        }
-
-        // --- Main Detection Loop ---
-        async function detectFrame() {
-            if (video.readyState < 2) {
-                requestAnimationFrame(detectFrame);
-                return;
-            }
-
-            frameCount++;
-            if (frameCount % (FRAMES_TO_SKIP + 1) !== 0) {
-                requestAnimationFrame(detectFrame);
-                return;
-            }
-
-            let predictions;
-            try {
-                if (model) {
-                    // NEW: Perform detection OUTSIDE of tf.tidy
-                    predictions = await model.detect(video);
-                } else {
-                    requestAnimationFrame(detectFrame);
-                    return;
-                }
-            } catch (e) {
-                console.error("Error during model detection (outside tf.tidy):", e); // Log for debugging
-                requestAnimationFrame(detectFrame);
-                return;
-            }
-
-            // NEW: Use tf.tidy only for synchronous operations (drawing, status updates)
-            tf.tidy(() => {
-                ctx.clearRect(0, 0, canvas.width, canvas.height);
-                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-                let personDetected = false;
-                let isPersonClose = false;
-
-                predictions.forEach(prediction => {
-                    if (prediction.class === 'person' && prediction.score > 0.6) {
-                        personDetected = true;
-                        const [x, y, width, height] = prediction.bbox;
-
-                        ctx.strokeStyle = 'lime';
-                        ctx.lineWidth = 2;
-                        ctx.strokeRect(x, y, width, height);
-
-                        ctx.fillStyle = 'lime';
-                        ctx.font = '16px sans-serif';
-                        ctx.fillText(`Person (${Math.round(prediction.score * 100)}%)`, x, y > 10 ? y - 5 : 10);
-
-                        if (height > PROXIMITY_THRESHOLD_HEIGHT) {
-                            isPersonClose = true;
-                            ctx.strokeStyle = 'red';
-                            ctx.lineWidth = 4;
-                            ctx.strokeRect(x, y, width, height);
-                            ctx.fillStyle = 'red';
-                            ctx.fillText(`VERY CLOSE!`, x, y + height + 20);
-                        }
-                    }
-                });
-
-                // --- Update Status Message and Play Voice Alerts ---
-                if (isPersonClose) {
-                    statusMessage.className = 'warning-text';
-                    statusMessage.innerText = "WARNING: Person is very close!";
-                    statusMessage.style.display = 'block'; // Show message
-                    speak("Warning: Person very close.");
-                } else if (personDetected) {
-                    statusMessage.className = '';
-                    statusMessage.innerText = "Person detected.";
-                    statusMessage.style.display = 'block'; // Show message
-                } else {
-                    statusMessage.className = '';
-                    statusMessage.innerText = ""; // Clear text
-                    statusMessage.style.display = 'none'; // Hide message completely
-                }
-            }); // End of tf.tidy() block
-
-            requestAnimationFrame(detectFrame);
-        }
-
-        document.addEventListener('DOMContentLoaded', loadModelAndStartDetection);
-    </script>
 </body>
 </html>
