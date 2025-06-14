@@ -2,133 +2,180 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>SafeVision AI</title>
   <style>
     body {
       margin: 0;
       background: #0f172a;
       color: white;
-      font-family: Arial, sans-serif;
+      font-family: 'Segoe UI', sans-serif;
       text-align: center;
       display: flex;
       flex-direction: column;
       align-items: center;
     }
-    canvas, video {
-      position: absolute;
-      top: 0;
-      left: 0;
-    }
+
     #wrapper {
       position: relative;
       width: 100%;
       max-width: 400px;
-      height: 300px;
-      margin-top: 20px;
+      margin-top: 10px;
     }
-    #status {
-      margin-top: 320px;
-      font-size: 16px;
+
+    video, canvas {
+      width: 100%;
+      height: auto;
+      border-radius: 12px;
+    }
+
+    #info {
+      background-color: #1e293b;
+      padding: 10px 15px;
+      margin-top: 20px;
+      border-radius: 12px;
+      text-align: left;
+      max-width: 400px;
+      width: 90%;
+      font-size: 15px;
+    }
+
+    #info strong {
       color: #10b981;
+    }
+
+    #status {
+      margin-top: 8px;
+      font-size: 14px;
+      color: #cbd5e1;
     }
   </style>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.3.0"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
 </head>
 <body>
-  <h2>🧠 SafeVision Object Detector</h2>
+  <h2>🔒 SafeVision AI</h2>
   <div id="wrapper">
-    <video id="webcam" autoplay muted playsinline width="400" height="300"></video>
-    <canvas id="canvas" width="400" height="300"></canvas>
+    <video id="webcam" autoplay muted playsinline></video>
+    <canvas id="canvas"></canvas>
   </div>
-  <div id="status">Initializing...</div>
+
+  <div id="info">
+    <div><strong>Date:</strong> <span id="date"></span></div>
+    <div><strong>Time:</strong> <span id="time"></span></div>
+    <div><strong>Temperature:</strong> ~34°C</div>
+    <div><strong>Wind:</strong> Light wind, 6 km/h</div>
+    <div><strong>Object Detected:</strong> <span id="detected">None</span></div>
+    <div id="status">Model loading...</div>
+  </div>
 
   <script>
     const video = document.getElementById("webcam");
     const canvas = document.getElementById("canvas");
     const ctx = canvas.getContext("2d");
+    const detectedLabel = document.getElementById("detected");
     const status = document.getElementById("status");
+    const dateText = document.getElementById("date");
+    const timeText = document.getElementById("time");
 
     let model;
-    let lastSpoken = "";
-    let lastSpeakTime = 0;
+    let lastSpoken = '';
+    let speaking = false;
 
-    // Speak utility
     function speak(text) {
+      if (speaking || text === lastSpoken) return;
+      speaking = true;
       const utterance = new SpeechSynthesisUtterance(text);
       utterance.lang = "en-IN";
+      utterance.onend = () => {
+        speaking = false;
+      };
       speechSynthesis.cancel();
       speechSynthesis.speak(utterance);
+      lastSpoken = text;
     }
 
-    // Speak time/date/weather info every 50s
-    function announceInfo() {
+    function updateDateTime() {
       const now = new Date();
-      const hours = now.getHours();
-      const mins = now.getMinutes().toString().padStart(2, '0');
-      const weekday = now.toLocaleString('en-IN', { weekday: 'long' });
-      const date = now.toLocaleDateString();
-      const time = `${hours}:${mins}`;
-      const temperature = "approximately 34 degrees Celsius";  // You can update this
-      const wind = "light wind at 6 kilometers per hour";      // Mock windspeed
-      speak(`Today is ${weekday}, date ${date}. Current time is ${time}. Temperature is ${temperature}, with ${wind}.`);
+      const date = now.toLocaleDateString('en-IN', { weekday: 'long', year: 'numeric', month: 'short', day: 'numeric' });
+      const time = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+      dateText.textContent = date;
+      timeText.textContent = time;
     }
 
-    // Start announcements every 50 sec
-    setInterval(announceInfo, 50000);
+    function announceEvery50s() {
+      const now = new Date();
+      const day = now.toLocaleString('en-IN', { weekday: 'long' });
+      const date = now.toLocaleDateString();
+      const time = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      speak(`Today is ${day}, date ${date}. Current time is ${time}. Temperature is approximately 34 degrees Celsius, with light wind at 6 kilometers per hour.`);
+    }
 
-    // Load model
-    cocoSsd.load().then((loadedModel) => {
+    setInterval(updateDateTime, 1000);
+    setInterval(announceEvery50s, 50000);
+
+    cocoSsd.load().then(loadedModel => {
       model = loadedModel;
-      status.innerText = "Model loaded ✅";
-      speak("AI model loaded successfully.");
+      status.innerText = "✅ AI model loaded.";
+      speak("Welcome to SafeVision. AI model loaded successfully.");
       startCamera();
     });
 
-    // Start camera (back camera)
     function startCamera() {
       navigator.mediaDevices.getUserMedia({
         video: {
           facingMode: { exact: "environment" }
         }
-      })
-      .then((stream) => {
+      }).then(stream => {
         video.srcObject = stream;
-        video.addEventListener("loadeddata", detectFrame);
-      })
-      .catch((err) => {
-        status.innerText = "Camera error: " + err;
+        video.onloadedmetadata = () => {
+          video.play();
+          canvas.width = video.videoWidth;
+          canvas.height = video.videoHeight;
+          detectFrame();
+        };
+      }).catch(err => {
+        status.innerText = "Camera error: " + err.message;
         speak("Camera access failed.");
       });
     }
 
-    // Detect and draw
     function detectFrame() {
-      if (!model) return;
-      model.detect(video).then((predictions) => {
+      model.detect(video).then(predictions => {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-        predictions.forEach((pred) => {
+        let spokenSomething = false;
+
+        predictions.forEach(pred => {
           if (pred.score > 0.6) {
+            let [x, y, width, height] = pred.bbox;
+            x = Math.max(0, x);
+            y = Math.max(0, y);
+            width = Math.min(width, canvas.width - x);
+            height = Math.min(height, canvas.height - y);
+
             ctx.strokeStyle = "#10b981";
             ctx.lineWidth = 2;
-            ctx.strokeRect(...pred.bbox);
+            ctx.strokeRect(x, y, width, height);
             ctx.fillStyle = "#10b981";
             ctx.font = "16px sans-serif";
-            ctx.fillText(pred.class, pred.bbox[0], pred.bbox[1] > 10 ? pred.bbox[1] - 5 : 10);
-            const spoken = `I see a ${pred.class}`;
-            if (spoken !== lastSpoken || Date.now() - lastSpeakTime > 5000) {
-              speak(spoken);
-              lastSpoken = spoken;
-              lastSpeakTime = Date.now();
+            ctx.fillText(pred.class, x, y > 10 ? y - 5 : 10);
+
+            if (!spokenSomething && pred.class !== lastSpoken) {
+              detectedLabel.textContent = pred.class;
+              speak(`I see a ${pred.class}`);
+              spokenSomething = true;
             }
           }
         });
+
+        if (predictions.length === 0) {
+          detectedLabel.textContent = 'None';
+        }
+
         requestAnimationFrame(detectFrame);
       });
     }
 
-    // Welcome message
     window.onload = () => {
       speak("Welcome to SafeVision");
     };
