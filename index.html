@@ -10,12 +10,16 @@
       font-family: sans-serif;
       background-color: #000;
       color: #fff;
-      text-align: center;
+      overflow: hidden;
     }
-    #video {
-      width: 100%;
-      height: auto;
+    video, canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
       object-fit: cover;
+      z-index: 0;
     }
     #info {
       position: absolute;
@@ -25,22 +29,18 @@
       background-color: rgba(0, 0, 0, 0.7);
       padding: 10px;
       border-radius: 8px;
-    }
-    #canvas {
-      position: absolute;
-      top: 0;
-      left: 0;
+      z-index: 2;
     }
   </style>
 </head>
 <body>
-  <video id="video" autoplay playsinline></video>
+  <video id="video" autoplay playsinline muted></video>
   <canvas id="canvas"></canvas>
   <div id="info">
     <div id="status">🔄 Loading AI model...</div>
-    <div id="weather"></div>
+    <div id="weather">🌡️ Temp: 35°C | 🌬️ Wind: 15 km/h</div>
     <div id="datetime"></div>
-    <div id="object"></div>
+    <div id="object">👁️ Waiting for detection...</div>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0"></script>
@@ -52,14 +52,12 @@
     const ctx = canvas.getContext("2d");
     const statusEl = document.getElementById("status");
     const objectEl = document.getElementById("object");
-    const weatherEl = document.getElementById("weather");
     const datetimeEl = document.getElementById("datetime");
 
     let model;
     let lastSpoken = "";
     let speaking = false;
 
-    // 🔊 Speak with no tap needed
     function speak(text) {
       if (speaking || text === lastSpoken) return;
       const utter = new SpeechSynthesisUtterance(text);
@@ -71,43 +69,44 @@
       lastSpoken = text;
     }
 
-    // 🕓 Show date, time, weather
-    function updateInfo() {
+    function updateDateTime() {
       const now = new Date();
       const date = now.toDateString();
       const time = now.toLocaleTimeString();
       datetimeEl.textContent = `📅 ${date} | ⏰ ${time}`;
-
-      // Fake weather for now (can update via real API later)
-      weatherEl.textContent = `🌡️ Temp: 35°C | 🌬️ Wind: 15 km/h`;
     }
 
-    setInterval(updateInfo, 1000);
-    updateInfo();
+    setInterval(updateDateTime, 1000);
+    updateDateTime();
 
-    // 📷 Load back camera
     async function setupCamera() {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: { exact: "environment" }
-        },
+        video: { facingMode: { exact: "environment" } },
         audio: false
       });
       video.srcObject = stream;
       return new Promise((resolve) => {
-        video.onloadedmetadata = () => resolve(video);
+        video.onloadedmetadata = () => {
+          video.play();
+          resizeCanvas();
+          resolve(video);
+        };
       });
     }
 
-    async function detectFrame() {
+    function resizeCanvas() {
       canvas.width = video.videoWidth;
       canvas.height = video.videoHeight;
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
 
+    async function detectFrame() {
+      resizeCanvas();
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
       const predictions = await model.detect(video);
 
       let said = false;
-      predictions.forEach((pred) => {
+
+      predictions.forEach(pred => {
         const [x, y, width, height] = pred.bbox;
         ctx.strokeStyle = "#00FF00";
         ctx.lineWidth = 2;
@@ -116,9 +115,9 @@
         ctx.fillText(pred.class, x, y > 10 ? y - 5 : 10);
 
         if (!said) {
-          const text = `I see a ${pred.class}`;
-          objectEl.textContent = `👁️ ${text}`;
-          speak(text);
+          const msg = `I see a ${pred.class}`;
+          objectEl.textContent = `👁️ ${msg}`;
+          speak(msg);
           said = true;
         }
       });
