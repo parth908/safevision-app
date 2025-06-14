@@ -11,26 +11,28 @@
       color: white;
       font-family: Arial, sans-serif;
       text-align: center;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
     }
     canvas, video {
       position: absolute;
-      left: 0;
       top: 0;
+      left: 0;
     }
     #wrapper {
       position: relative;
       width: 100%;
       max-width: 400px;
-      margin: auto;
-      padding-top: 20px;
+      height: 300px;
+      margin-top: 20px;
     }
     #status {
-      margin-top: 430px;
+      margin-top: 320px;
       font-size: 16px;
       color: #10b981;
     }
   </style>
-  <!-- TensorFlow & COCO-SSD -->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.3.0"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
 </head>
@@ -40,7 +42,7 @@
     <video id="webcam" autoplay muted playsinline width="400" height="300"></video>
     <canvas id="canvas" width="400" height="300"></canvas>
   </div>
-  <div id="status">Loading model...</div>
+  <div id="status">Initializing...</div>
 
   <script>
     const video = document.getElementById("webcam");
@@ -52,33 +54,56 @@
     let lastSpoken = "";
     let lastSpeakTime = 0;
 
-    cocoSsd.load().then((loadedModel) => {
-      model = loadedModel;
-      status.innerText = "Model loaded ✅";
-      startCamera();
-    });
-
-    function startCamera() {
-      navigator.mediaDevices.getUserMedia({ video: true })
-        .then((stream) => {
-          video.srcObject = stream;
-          video.addEventListener("loadeddata", detectFrame);
-        })
-        .catch((err) => {
-          status.innerText = "Camera error: " + err;
-        });
-    }
-
+    // Speak utility
     function speak(text) {
-      if (text === lastSpoken && Date.now() - lastSpeakTime < 5000) return;
       const utterance = new SpeechSynthesisUtterance(text);
       utterance.lang = "en-IN";
       speechSynthesis.cancel();
       speechSynthesis.speak(utterance);
-      lastSpoken = text;
-      lastSpeakTime = Date.now();
     }
 
+    // Speak time/date/weather info every 50s
+    function announceInfo() {
+      const now = new Date();
+      const hours = now.getHours();
+      const mins = now.getMinutes().toString().padStart(2, '0');
+      const weekday = now.toLocaleString('en-IN', { weekday: 'long' });
+      const date = now.toLocaleDateString();
+      const time = `${hours}:${mins}`;
+      const temperature = "approximately 34 degrees Celsius";  // You can update this
+      const wind = "light wind at 6 kilometers per hour";      // Mock windspeed
+      speak(`Today is ${weekday}, date ${date}. Current time is ${time}. Temperature is ${temperature}, with ${wind}.`);
+    }
+
+    // Start announcements every 50 sec
+    setInterval(announceInfo, 50000);
+
+    // Load model
+    cocoSsd.load().then((loadedModel) => {
+      model = loadedModel;
+      status.innerText = "Model loaded ✅";
+      speak("AI model loaded successfully.");
+      startCamera();
+    });
+
+    // Start camera (back camera)
+    function startCamera() {
+      navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: { exact: "environment" }
+        }
+      })
+      .then((stream) => {
+        video.srcObject = stream;
+        video.addEventListener("loadeddata", detectFrame);
+      })
+      .catch((err) => {
+        status.innerText = "Camera error: " + err;
+        speak("Camera access failed.");
+      });
+    }
+
+    // Detect and draw
     function detectFrame() {
       if (!model) return;
       model.detect(video).then((predictions) => {
@@ -91,12 +116,22 @@
             ctx.fillStyle = "#10b981";
             ctx.font = "16px sans-serif";
             ctx.fillText(pred.class, pred.bbox[0], pred.bbox[1] > 10 ? pred.bbox[1] - 5 : 10);
-            speak(`I see a ${pred.class}`);
+            const spoken = `I see a ${pred.class}`;
+            if (spoken !== lastSpoken || Date.now() - lastSpeakTime > 5000) {
+              speak(spoken);
+              lastSpoken = spoken;
+              lastSpeakTime = Date.now();
+            }
           }
         });
         requestAnimationFrame(detectFrame);
       });
     }
+
+    // Welcome message
+    window.onload = () => {
+      speak("Welcome to SafeVision");
+    };
   </script>
 </body>
 </html>
