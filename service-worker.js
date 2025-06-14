@@ -1,59 +1,43 @@
-const CACHE_NAME = 'safevision-cache-v1.0'; // Version your cache
+const CACHE_NAME = 'safevision-cache-v1.0';
 const urlsToCache = [
-  '/', // Caches index.html (the root path)
+  '/',
   '/index.html',
-  '/manifest.json', // Cache the manifest file too!
-  '/icon-192.png',  // Cache your icons
-  '/icon-512.png',  // Cache your icons
-  'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.11.0',
-  'https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.2'
-  // Add any other static assets if they were external (e.g., separate CSS files)
+  '/manifest.json',
+  '/icon-192.png',
+  '/icon-512.png',
+  'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.3.0',
+  'https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd'
 ];
 
-// Install event: Cache essential assets
-self.addEventListener('install', (event) => {
-  console.log('Service Worker: Installing');
+// Install Service Worker
+self.addEventListener('install', function(event) {
   event.waitUntil(
-    caches.open(CACHE_NAME)
-      .then((cache) => {
-        console.log('Service Worker: Caching all app shell content');
-        return cache.addAll(urlsToCache);
-      })
-      .catch(error => {
-        console.error('Service Worker: Caching failed', error);
-      })
+    caches.open(CACHE_NAME).then(function(cache) {
+      return cache.addAll(urlsToCache);
+    })
   );
 });
 
-// Fetch event: Serve content from cache first, then fall back to network
-self.addEventListener('fetch', (event) => {
-  event.respondWith(
-    caches.match(event.request)
-      .then((response) => {
-        // Cache hit - return response
-        if (response) {
-          return response;
-        }
-        // No cache hit - fetch from network
-        return fetch(event.request);
-      })
-  );
-});
-
-// Activate event: Clean up old caches
-self.addEventListener('activate', (event) => {
-  console.log('Service Worker: Activating');
-  const cacheWhitelist = [CACHE_NAME];
+// Activate and clean old caches
+self.addEventListener('activate', function(event) {
   event.waitUntil(
-    caches.keys().then((cacheNames) => {
+    caches.keys().then(function(cacheNames) {
       return Promise.all(
-        cacheNames.map((cacheName) => {
-          if (cacheWhitelist.indexOf(cacheName) === -1) {
-            console.log('Service Worker: Deleting old cache', cacheName);
-            return caches.delete(cacheName); // Delete old caches
+        cacheNames.map(function(cacheName) {
+          if (cacheName !== CACHE_NAME) {
+            return caches.delete(cacheName);
           }
         })
       );
+    })
+  );
+});
+
+// Fetch from cache or network
+self.addEventListener('fetch', function(event) {
+  event.respondWith(
+    caches.match(event.request).then(function(response) {
+      return response || fetch(event.request);
     })
   );
 });
