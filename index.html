@@ -2,203 +2,140 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
+  <title>SafeVision</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>SafeVision AI</title>
   <style>
     body {
       margin: 0;
-      background: #0f172a;
-      color: white;
-      font-family: 'Segoe UI', sans-serif;
+      font-family: sans-serif;
+      background-color: #000;
+      color: #fff;
       text-align: center;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
     }
-
-    #wrapper {
-      position: relative;
+    #video {
       width: 100%;
-      max-width: 400px;
-      aspect-ratio: 4/3;
-      margin-top: 10px;
+      height: auto;
+      object-fit: cover;
     }
-
-    video, canvas {
+    #info {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      text-align: left;
+      background-color: rgba(0, 0, 0, 0.7);
+      padding: 10px;
+      border-radius: 8px;
+    }
+    #canvas {
       position: absolute;
       top: 0;
       left: 0;
-      width: 100%;
-      height: 100%;
-      border-radius: 12px;
-    }
-
-    #info {
-      background-color: #1e293b;
-      padding: 10px 15px;
-      margin-top: 20px;
-      border-radius: 12px;
-      text-align: left;
-      max-width: 400px;
-      width: 90%;
-      font-size: 15px;
-    }
-
-    #info strong {
-      color: #10b981;
-    }
-
-    #status {
-      margin-top: 8px;
-      font-size: 14px;
-      color: #cbd5e1;
     }
   </style>
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.3.0"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
 </head>
 <body>
-  <h2>SafeVision AI</h2>
-  <div id="wrapper">
-    <video id="webcam" autoplay muted playsinline></video>
-    <canvas id="canvas"></canvas>
+  <video id="video" autoplay playsinline></video>
+  <canvas id="canvas"></canvas>
+  <div id="info">
+    <div id="status">🔄 Loading AI model...</div>
+    <div id="weather"></div>
+    <div id="datetime"></div>
+    <div id="object"></div>
   </div>
 
-  <div id="info">
-    <div><strong>Date:</strong> <span id="date"></span></div>
-    <div><strong>Time:</strong> <span id="time"></span></div>
-    <div><strong>Temperature:</strong> ~34°C</div>
-    <div><strong>Wind:</strong> Light wind, 6 km/h</div>
-    <div><strong>Object Detected:</strong> <span id="detected">None</span></div>
-    <div id="status">Model loading...</div>
-  </div>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
 
   <script>
-    const video = document.getElementById("webcam");
+    const video = document.getElementById("video");
     const canvas = document.getElementById("canvas");
     const ctx = canvas.getContext("2d");
-    const detectedLabel = document.getElementById("detected");
-    const status = document.getElementById("status");
-    const dateText = document.getElementById("date");
-    const timeText = document.getElementById("time");
+    const statusEl = document.getElementById("status");
+    const objectEl = document.getElementById("object");
+    const weatherEl = document.getElementById("weather");
+    const datetimeEl = document.getElementById("datetime");
 
     let model;
-    let lastSpoken = '';
+    let lastSpoken = "";
     let speaking = false;
 
+    // 🔊 Speak with no tap needed
     function speak(text) {
       if (speaking || text === lastSpoken) return;
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.lang = "en-IN";
-      utterance.onend = () => speaking = false;
+      const utter = new SpeechSynthesisUtterance(text);
+      utter.lang = "en-IN";
+      utter.onend = () => speaking = false;
       speaking = true;
       speechSynthesis.cancel();
-      speechSynthesis.speak(utterance);
+      speechSynthesis.speak(utter);
       lastSpoken = text;
     }
 
-    function updateDateTime() {
+    // 🕓 Show date, time, weather
+    function updateInfo() {
       const now = new Date();
-      const date = now.toLocaleDateString('en-IN', { weekday: 'long', year: 'numeric', month: 'short', day: 'numeric' });
-      const time = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
-      dateText.textContent = date;
-      timeText.textContent = time;
+      const date = now.toDateString();
+      const time = now.toLocaleTimeString();
+      datetimeEl.textContent = `📅 ${date} | ⏰ ${time}`;
+
+      // Fake weather for now (can update via real API later)
+      weatherEl.textContent = `🌡️ Temp: 35°C | 🌬️ Wind: 15 km/h`;
     }
 
-    function announceEvery50s() {
-      const now = new Date();
-      const day = now.toLocaleString('en-IN', { weekday: 'long' });
-      const date = now.toLocaleDateString();
-      const time = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      speak(`Today is ${day}, date ${date}. Current time is ${time}. Temperature is approximately 34 degrees Celsius, with light wind at 6 kilometers per hour.`);
-    }
+    setInterval(updateInfo, 1000);
+    updateInfo();
 
-    setInterval(updateDateTime, 1000);
-    setInterval(announceEvery50s, 50000);
-
-    cocoSsd.load().then(loadedModel => {
-      model = loadedModel;
-      status.innerText = "✅ AI model loaded.";
-      speak("Welcome to SafeVision. AI model loaded successfully.");
-      startCamera();
-    });
-
-    function startCamera() {
-      navigator.mediaDevices.getUserMedia({
+    // 📷 Load back camera
+    async function setupCamera() {
+      const stream = await navigator.mediaDevices.getUserMedia({
         video: {
           facingMode: { exact: "environment" }
-        }
-      }).then(stream => {
-        video.srcObject = stream;
-        video.onloadedmetadata = () => {
-          video.play();
-
-          // Match canvas size exactly with video dimensions
-          setTimeout(() => {
-            canvas.width = video.videoWidth;
-            canvas.height = video.videoHeight;
-            detectFrame();
-          }, 500); // delay to let video settle
-        };
-      }).catch(err => {
-        status.innerText = "Camera error: " + err.message;
-        speak("Camera access failed.");
+        },
+        audio: false
+      });
+      video.srcObject = stream;
+      return new Promise((resolve) => {
+        video.onloadedmetadata = () => resolve(video);
       });
     }
 
-    function detectFrame() {
-      model.detect(video).then(predictions => {
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        let spokenSomething = false;
+    async function detectFrame() {
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-        predictions.forEach(pred => {
-          if (pred.score > 0.6) {
-            let [x, y, width, height] = pred.bbox;
-            x = Math.max(0, Math.min(x, canvas.width));
-            y = Math.max(0, Math.min(y, canvas.height));
-            width = Math.min(width, canvas.width - x);
-            height = Math.min(height, canvas.height - y);
+      const predictions = await model.detect(video);
 
-            ctx.strokeStyle = "#10b981";
-            ctx.lineWidth = 2;
-            ctx.strokeRect(x, y, width, height);
-            ctx.fillStyle = "#10b981";
-            ctx.font = "16px sans-serif";
-            ctx.fillText(pred.class, x, y > 10 ? y - 5 : 10);
+      let said = false;
+      predictions.forEach((pred) => {
+        const [x, y, width, height] = pred.bbox;
+        ctx.strokeStyle = "#00FF00";
+        ctx.lineWidth = 2;
+        ctx.strokeRect(x, y, width, height);
+        ctx.fillStyle = "#00FF00";
+        ctx.fillText(pred.class, x, y > 10 ? y - 5 : 10);
 
-            if (!spokenSomething && pred.class !== lastSpoken) {
-              detectedLabel.textContent = pred.class;
-              speak(`I see a ${pred.class}`);
-              spokenSomething = true;
-            }
-          }
-        });
-
-        if (predictions.length === 0) {
-          detectedLabel.textContent = 'None';
+        if (!said) {
+          const text = `I see a ${pred.class}`;
+          objectEl.textContent = `👁️ ${text}`;
+          speak(text);
+          said = true;
         }
-
-        requestAnimationFrame(detectFrame);
       });
+
+      requestAnimationFrame(detectFrame);
     }
 
-    // 👇 Fake interaction to unlock speech on mobile
-    window.addEventListener("DOMContentLoaded", () => {
-      const unlock = () => {
-        const dummy = new SpeechSynthesisUtterance('');
-        speechSynthesis.speak(dummy);
-        window.removeEventListener('touchstart', unlock);
-        window.removeEventListener('click', unlock);
-      };
-      window.addEventListener('touchstart', unlock);
-      window.addEventListener('click', unlock);
-
-      // Attempt to trigger silently on load
-      const silent = new SpeechSynthesisUtterance('');
-      speechSynthesis.speak(silent);
-
+    async function main() {
       speak("Welcome to SafeVision");
-    });
+      await setupCamera();
+      model = await cocoSsd.load();
+      statusEl.textContent = "✅ AI model loaded!";
+      speak("AI model loaded");
+      detectFrame();
+    }
+
+    main();
   </script>
 </body>
 </html>
