@@ -7,80 +7,83 @@
   <style>
     body {
       margin: 0;
-      font-family: Arial, sans-serif;
       background: #0f172a;
       color: white;
+      font-family: Arial, sans-serif;
       text-align: center;
-      padding: 20px;
+      padding: 10px;
     }
-    .card {
-      background: #1e293b;
-      padding: 20px;
-      margin: 10px auto;
+    video {
+      width: 90%;
+      max-width: 400px;
       border-radius: 12px;
-      max-width: 420px;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-    }
-    .title {
-      font-size: 24px;
-      margin-bottom: 10px;
+      margin-top: 10px;
+      border: 2px solid #3b82f6;
     }
     .info {
-      margin: 10px 0;
-    }
-    button {
-      background-color: #3b82f6;
-      border: none;
-      padding: 12px 24px;
-      border-radius: 8px;
-      color: white;
-      font-size: 16px;
-      cursor: pointer;
-      margin-top: 20px;
-    }
-    button:hover {
-      background-color: #2563eb;
+      margin: 10px;
+      font-size: 18px;
     }
   </style>
 </head>
 <body>
-
-  <div class="card">
-    <div class="title">🌐 SafeVision Dashboard</div>
-    <div class="info" id="datetime">Loading time...</div>
-    <div class="info" id="weather">Loading weather...</div>
-    <button onclick="loadModel()">Start Emotion Detection</button>
-  </div>
+  <h2>🎯 SafeVision Live</h2>
+  <video id="camera" autoplay muted playsinline></video>
+  <div class="info" id="datetime">Loading time...</div>
+  <div class="info" id="weather">Loading weather...</div>
 
   <script>
-    // 📅 Date & Time
+    // 🎥 Start Camera
+    const video = document.getElementById("camera");
+    navigator.mediaDevices.getUserMedia({ video: true })
+      .then(stream => video.srcObject = stream)
+      .catch(err => console.error("Camera error:", err));
+
+    // ⏰ Date & Time
     function updateDateTime() {
       const now = new Date();
-      const dateOptions = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
+      const options = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
       const time = now.toLocaleTimeString();
       document.getElementById("datetime").innerText =
-        `${now.toLocaleDateString(undefined, dateOptions)}\n${time}`;
+        `${now.toLocaleDateString(undefined, options)}\n${time}`;
     }
     setInterval(updateDateTime, 1000);
     updateDateTime();
 
-    // 🌤️ Free Weather from wttr.in
-    fetch("https://wttr.in/?format=%C+🌡️+%t+💨+%w")
-      .then(response => response.text())
+    // 🌤️ Weather (Free source)
+    let weatherData = "Weather info not available.";
+    fetch("https://wttr.in/?format=%C+🌡️%t+💨%w")
+      .then(res => res.text())
       .then(data => {
-        document.getElementById("weather").innerText = "Weather: " + data;
+        weatherData = "Current " + data;
+        document.getElementById("weather").innerText = weatherData;
       })
       .catch(() => {
-        document.getElementById("weather").innerText = "Weather info not available.";
+        document.getElementById("weather").innerText = weatherData;
       });
 
-    // 🤖 AI Model Loader (placeholder)
-    function loadModel() {
-      alert("Model loading started. Insert your model loading code here.");
-      // Example:
-      // const model = await tmImage.load('model.json', 'metadata.json');
+    // 🗣️ Speak Info
+    function speakInfo(text) {
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = 'en-IN';
+      speechSynthesis.cancel();  // stop any current speech
+      speechSynthesis.speak(utterance);
     }
-  </script>
 
+    // 🔁 Speak Every 50 Seconds
+    setInterval(() => {
+      const now = new Date();
+      const summary = `Today is ${now.toDateString()}, time is ${now.toLocaleTimeString()}. ${weatherData}`;
+      speakInfo(summary);
+    }, 50000); // 50 seconds
+
+    // 🚨 Emergency Detection Mock (replace with your logic)
+    setInterval(() => {
+      const danger = Math.random() < 0.1; // 🔁 REPLACE with real condition!
+      if (danger) {
+        speakInfo("⚠️ Emergency detected. Please take immediate action.");
+      }
+    }, 3000); // check every 3 sec
+  </script>
 </body>
 </html>
