@@ -2,8 +2,8 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>SafeVision</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SafeVision AI</title>
   <style>
     body {
       margin: 0;
@@ -11,70 +11,92 @@
       color: white;
       font-family: Arial, sans-serif;
       text-align: center;
-      padding: 10px;
     }
-    video {
-      width: 90%;
+    canvas, video {
+      position: absolute;
+      left: 0;
+      top: 0;
+    }
+    #wrapper {
+      position: relative;
+      width: 100%;
       max-width: 400px;
-      border-radius: 12px;
-      margin-top: 10px;
-      border: 2px solid #3b82f6;
+      margin: auto;
+      padding-top: 20px;
     }
-    .info {
-      margin: 10px;
-      font-size: 18px;
+    #status {
+      margin-top: 430px;
+      font-size: 16px;
+      color: #10b981;
     }
   </style>
+  <!-- TensorFlow & COCO-SSD -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.3.0"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
 </head>
 <body>
-  <h2>🎯 SafeVision Live</h2>
-  <video id="camera" autoplay muted playsinline></video>
-  <div class="info" id="datetime">Loading time...</div>
-  <div class="info" id="weather">Loading weather...</div>
+  <h2>🧠 SafeVision Object Detector</h2>
+  <div id="wrapper">
+    <video id="webcam" autoplay muted playsinline width="400" height="300"></video>
+    <canvas id="canvas" width="400" height="300"></canvas>
+  </div>
+  <div id="status">Loading model...</div>
 
   <script>
-    // 🎥 Start Camera
-    const video = document.getElementById("camera");
-    navigator.mediaDevices.getUserMedia({ video: true })
-      .then(stream => video.srcObject = stream)
-      .catch(err => console.error("Camera error:", err));
+    const video = document.getElementById("webcam");
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+    const status = document.getElementById("status");
 
-    // ⏰ Date & Time
-    function updateDateTime() {
-      const now = new Date();
-      const options = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
-      const time = now.toLocaleTimeString();
-      document.getElementById("datetime").innerText =
-        `${now.toLocaleDateString(undefined, options)}\n${time}`;
+    let model;
+    let lastSpoken = "";
+    let lastSpeakTime = 0;
+
+    cocoSsd.load().then((loadedModel) => {
+      model = loadedModel;
+      status.innerText = "Model loaded ✅";
+      startCamera();
+    });
+
+    function startCamera() {
+      navigator.mediaDevices.getUserMedia({ video: true })
+        .then((stream) => {
+          video.srcObject = stream;
+          video.addEventListener("loadeddata", detectFrame);
+        })
+        .catch((err) => {
+          status.innerText = "Camera error: " + err;
+        });
     }
-    setInterval(updateDateTime, 1000);
-    updateDateTime();
 
-    // 🌤️ Weather (Free source)
-    let weatherData = "Weather info not available.";
-    fetch("https://wttr.in/?format=%C+🌡️%t+💨%w")
-      .then(res => res.text())
-      .then(data => {
-        weatherData = "Current " + data;
-        document.getElementById("weather").innerText = weatherData;
-      })
-      .catch(() => {
-        document.getElementById("weather").innerText = weatherData;
-      });
-
-    // 🗣️ Speak Info Every 50 Seconds
-    function speakInfo(text) {
+    function speak(text) {
+      if (text === lastSpoken && Date.now() - lastSpeakTime < 5000) return;
       const utterance = new SpeechSynthesisUtterance(text);
-      utterance.lang = 'en-IN';
+      utterance.lang = "en-IN";
       speechSynthesis.cancel();
       speechSynthesis.speak(utterance);
+      lastSpoken = text;
+      lastSpeakTime = Date.now();
     }
 
-    setInterval(() => {
-      const now = new Date();
-      const summary = `Today is ${now.toDateString()}, time is ${now.toLocaleTimeString()}. ${weatherData}`;
-      speakInfo(summary);
-    }, 50000);
+    function detectFrame() {
+      if (!model) return;
+      model.detect(video).then((predictions) => {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        predictions.forEach((pred) => {
+          if (pred.score > 0.6) {
+            ctx.strokeStyle = "#10b981";
+            ctx.lineWidth = 2;
+            ctx.strokeRect(...pred.bbox);
+            ctx.fillStyle = "#10b981";
+            ctx.font = "16px sans-serif";
+            ctx.fillText(pred.class, pred.bbox[0], pred.bbox[1] > 10 ? pred.bbox[1] - 5 : 10);
+            speak(`I see a ${pred.class}`);
+          }
+        });
+        requestAnimationFrame(detectFrame);
+      });
+    }
   </script>
 </body>
 </html>
