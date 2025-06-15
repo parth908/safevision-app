@@ -1,10 +1,9 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
     <meta charset="UTF-8" />
     <title>SafeVision</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
     <!-- Manifest for PWA features -->
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#000000">
@@ -17,29 +16,22 @@
             background-color: #000;
             color: #fff;
             overflow: hidden;
-            display: flex;
-            /* Use flexbox to center video/canvas if needed */
+            display: flex; /* Use flexbox to center video/canvas if needed */
             justify-content: center;
             align-items: center;
-            height: 100vh;
-            /* Full viewport height */
-            width: 100vw;
-            /* Full viewport width */
+            height: 100vh; /* Full viewport height */
+            width: 100vw;  /* Full viewport width */
         }
-
         /* Video and Canvas cover the entire screen */
-        video,
-        canvas {
+        video, canvas {
             position: absolute;
             top: 0;
             left: 0;
             width: 100vw;
             height: 100vh;
-            object-fit: cover;
-            /* Ensures video fills screen, may crop */
+            object-fit: cover; /* Ensures video fills screen, may crop */
             z-index: 0;
         }
-
         /* Info overlay for status, weather, datetime, object detection */
         #info {
             position: absolute;
@@ -49,10 +41,8 @@
             background-color: rgba(0, 0, 0, 0.7);
             padding: 10px;
             border-radius: 8px;
-            z-index: 2;
-            /* Ensures it's above video/canvas */
+            z-index: 2; /* Ensures it's above video/canvas */
         }
-
         /* Style for warning text, like "Person is very close" */
         .warning-text {
             color: red;
@@ -60,7 +50,6 @@
         }
     </style>
 </head>
-
 <body>
     <video id="video" autoplay playsinline muted></video>
     <canvas id="canvas"></canvas>
@@ -82,7 +71,7 @@
         const canvas = document.getElementById("canvas");
         const ctx = canvas.getContext("2d");
         const statusEl = document.getElementById("status");
-        const weatherEl = document.getElementById("weather"); // Still needed for text content
+        const weatherEl = document.getElementById("weather");
         const datetimeEl = document.getElementById("datetime");
         const objectEl = document.getElementById("object");
         const proximityStatusEl = document.getElementById("proximityStatus");
@@ -122,7 +111,7 @@
          * @param {string} type 'fullInfo' for periodic updates, 'warning' for immediate alerts.
          */
         function speak(text, type = 'fullInfo') {
-            console.log(`Attempting to speak (${type}):`, text);
+            console.log(`[TTS Debug] Attempting to speak (${type}): "${text}"`);
 
             let currentCooldown = 0;
             let lastSpeechTimeRef = 0;
@@ -136,25 +125,28 @@
             }
 
             if (speaking || (Date.now() - lastSpeechTimeRef < currentCooldown)) {
-                console.log(`Speech (${type}) blocked due to cooldown or already speaking.`);
+                console.log(`[TTS Debug] Speech (${type}) blocked due to cooldown or already speaking.`);
                 return;
             }
 
             if (type === 'warning' && speechSynthesis.speaking) {
                 speechSynthesis.cancel();
-                console.log("Cancelled ongoing speech for warning.");
+                console.log("[TTS Debug] Cancelled ongoing speech for warning.");
             } else if (type === 'fullInfo' && speechSynthesis.speaking) {
-                console.log("Full info speech deferred, another speech is active.");
+                console.log("[TTS Debug] Full info speech deferred, another speech is active.");
                 return;
             }
 
             const voices = speechSynthesis.getVoices();
             if (voices.length === 0) {
-                console.warn("No speech synthesis voices available. Speech will not work.");
+                console.warn("[TTS Debug] No speech synthesis voices available on this device.");
                 statusEl.textContent = "❌ Speech not available (no voices)";
                 statusEl.style.color = 'red';
                 return;
+            } else {
+                 console.log("[TTS Debug] Available voices:", voices.map(v => v.name));
             }
+
 
             const utterance = new SpeechSynthesisUtterance(text);
             utterance.lang = "en-IN";
@@ -162,13 +154,16 @@
             const indianVoice = voices.find(voice => voice.lang === 'en-IN' || voice.lang === 'en-GB' || voice.name.includes('India'));
             if (indianVoice) {
                 utterance.voice = indianVoice;
+                console.log("[TTS Debug] Using voice:", indianVoice.name);
+            } else {
+                console.warn("[TTS Debug] No specific Indian/GB English voice found, using default.");
             }
 
             utterance.rate = 1.0;
             utterance.pitch = 1.0;
             utterance.volume = 1.0;
 
-            utterance.onstart = () => { speaking = true; };
+            utterance.onstart = () => { speaking = true; console.log("[TTS Debug] Speech started."); };
             utterance.onend = () => {
                 speaking = false;
                 if (type === 'fullInfo') {
@@ -176,9 +171,10 @@
                 } else if (type === 'warning') {
                     lastWarningSpeechTime = Date.now();
                 }
+                console.log("[TTS Debug] Speech ended.");
             };
             utterance.onerror = (event) => {
-                console.error('SpeechSynthesisUtterance.onerror', event);
+                console.error('[TTS Debug] SpeechSynthesisUtterance.onerror:', event.error, event);
                 speaking = false;
             };
 
@@ -312,12 +308,21 @@
         // --- Initial App Load Function ---
         async function main() {
             statusEl.textContent = "🔄 Loading AI model...";
+            // Delay for voices to load, and to potentially satisfy autoplay policy with a slight wait
+            await new Promise(resolve => setTimeout(resolve, 500)); // Wait 0.5 seconds
+
+            // Explicitly call getVoices AFTER a short delay.
+            // Some browsers require a microtask to complete before voices are fully registered.
             speechSynthesis.onvoiceschanged = () => {
-                console.log("Voices loaded:", speechSynthesis.getVoices().map(v => v.name));
+                console.log("[TTS Debug] Voices loaded event fired. Voices:", speechSynthesis.getVoices().map(v => v.name));
             };
+            // Call getVoices immediately to populate the list if already ready
+            speechSynthesis.getVoices();
+
 
             await setupCamera();
             if (!video.srcObject) {
+                console.error("Camera setup failed, aborting main execution.");
                 return;
             }
 
@@ -325,8 +330,8 @@
             statusEl.textContent = "✅ AI model loaded!";
 
             // Initial full information speech after model loads
-            speakFullInformation();
-            setInterval(speakFullInformation, SPEECH_COOLDOWN_FULL_INFO);
+            speakFullInformation(); // Call once initially
+            setInterval(speakFullInformation, SPEECH_COOLDOWN_FULL_INFO); // Then periodically
 
             detectFrame();
         }
@@ -341,7 +346,6 @@
                 Proximity status: ${proximityStatusEl.textContent}.
             `.replace(/\s+/g, ' ').trim();
 
-            // Only speak if the combined text has changed since last full info speech
             if (combinedText !== lastSpokenFullInfo) {
                  speak(combinedText, 'fullInfo');
                  lastSpokenFullInfo = combinedText;
@@ -351,5 +355,4 @@
         document.addEventListener('DOMContentLoaded', main);
     </script>
 </body>
-
 </html>
