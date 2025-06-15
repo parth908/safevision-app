@@ -196,7 +196,7 @@
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({
                     video: {
-                        facingMode: { exact: "environment" },
+                        facingMode: 'environment', // CHANGED: Less strict than { exact: "environment" }
                         width: { ideal: 640 },
                         height: { ideal: 480 }
                     },
@@ -212,7 +212,13 @@
                 });
             } catch (error) {
                 console.error("Error accessing camera:", error);
-                statusEl.textContent = "❌ Camera access denied or not available. Please allow permissions and refresh.";
+                let errorMessage = "❌ Camera access denied or not available.";
+                if (error.name === "NotAllowedError") {
+                    errorMessage += " Please grant camera permissions.";
+                } else if (error.name === "NotFoundError") {
+                    errorMessage += " No suitable camera found.";
+                }
+                statusEl.textContent = errorMessage;
                 statusEl.style.color = 'red';
                 return null;
             }
