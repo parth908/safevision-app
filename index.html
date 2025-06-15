@@ -9,44 +9,105 @@
     <meta name="theme-color" content="#000000">
     <link rel="apple-touch-icon" href="icon-192.png">
 
+    <!-- Font Awesome for Icons (Mute/Unmute, Phone/SMS) -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+
     <style>
+        /* Base styles for the body to cover the entire viewport */
         body {
             margin: 0;
             font-family: sans-serif;
             background-color: #000;
             color: #fff;
-            overflow: hidden;
-            display: flex; /* Use flexbox to center video/canvas if needed */
+            overflow: hidden; /* Prevent scrolling */
+            display: flex;
             justify-content: center;
             align-items: center;
             height: 100vh; /* Full viewport height */
             width: 100vw;  /* Full viewport width */
         }
-        /* Video and Canvas cover the entire screen */
+        /* Video and Canvas elements to cover the entire screen */
         video, canvas {
             position: absolute;
             top: 0;
             left: 0;
             width: 100vw;
             height: 100vh;
-            object-fit: cover; /* Ensures video fills screen, may crop */
-            z-index: 0;
+            object-fit: cover; /* Ensures video fills screen, may crop if aspect ratios differ */
+            z-index: 0; /* Behind other UI elements */
         }
-        /* Info overlay for status, weather, datetime, object detection */
+        /* Information overlay for status, weather, datetime, object detection */
         #info {
             position: absolute;
             top: 10px;
             left: 10px;
             text-align: left;
-            background-color: rgba(0, 0, 0, 0.7);
+            background-color: rgba(0, 0, 0, 0.7); /* Semi-transparent black background */
             padding: 10px;
             border-radius: 8px;
-            z-index: 2; /* Ensures it's above video/canvas */
+            z-index: 2; /* Above video/canvas, below buttons */
+            font-size: 0.9em; /* Slightly smaller font for info block */
         }
-        /* Style for warning text, like "Person is very close" */
+        /* Styling for warning text (e.g., "Person is very close") */
         .warning-text {
             color: red;
             font-weight: bold;
+        }
+        /* Container for control buttons (Mute/Unmute, Emergency) */
+        .control-buttons {
+            position: absolute;
+            bottom: 20px;
+            right: 20px; /* Positioned to the right for easy access */
+            z-index: 3; /* On top of all other elements */
+            display: flex;
+            flex-direction: column; /* Stack buttons vertically */
+            gap: 10px; /* Space between buttons */
+        }
+        /* Styling for individual control buttons */
+        .control-button {
+            background-color: rgba(0, 123, 255, 0.8); /* Blue, slightly transparent */
+            border: none;
+            border-radius: 50%; /* Make them round */
+            color: white;
+            width: 60px; /* Size of the button */
+            height: 60px;
+            font-size: 24px; /* Icon size */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            cursor: pointer;
+            box-shadow: 0px 4px 8px rgba(0, 0, 0, 0.3); /* Subtle shadow for depth */
+            transition: background-color 0.3s ease; /* Smooth hover effect */
+        }
+        .control-button:hover {
+            background-color: rgba(0, 123, 255, 1); /* Opaque blue on hover */
+        }
+        /* Specific styling for the emergency button (red) */
+        .control-button.emergency-button {
+            background-color: rgba(220, 53, 69, 0.8); /* Red, slightly transparent */
+        }
+        .control-button.emergency-button:hover {
+            background-color: rgba(220, 53, 69, 1); /* Opaque red on hover */
+        }
+        /* Styling for the mute button when activated (grey) */
+        .control-button.muted {
+            background-color: rgba(108, 117, 125, 0.8); /* Grey when muted */
+        }
+        .control-button.muted:hover {
+            background-color: rgba(108, 117, 125, 1); /* Opaque grey on hover */
+        }
+        /* Status display for speech recognition (e.g., "Listening...") */
+        #speechRecognitionStatus {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background-color: rgba(0, 0, 0, 0.7);
+            padding: 8px 12px;
+            border-radius: 8px;
+            color: yellow; /* Yellow text for "listening" status */
+            font-size: 0.9em;
+            display: none; /* Hidden by default until recognition starts */
+            z-index: 3;
         }
     </style>
 </head>
@@ -61,12 +122,27 @@
         <div id="proximityStatus" style="color: limegreen;">🟢 No person detected</div>
     </div>
 
-    <!-- TensorFlow.js and COCO-SSD Model Libraries -->
+    <!-- Control Buttons -->
+    <div class="control-buttons">
+        <button id="emergencyCallButton" class="control-button emergency-button" title="Emergency SMS">
+            <i class="fas fa-sms"></i> <!-- SMS icon for emergency feature -->
+        </button>
+        <button id="muteToggleButton" class="control-button" title="Toggle Mute">
+            <i class="fas fa-volume-up"></i> <!-- Speaker icon for mute/unmute -->
+        </button>
+    </div>
+
+    <!-- Speech Recognition Status Display -->
+    <div id="speechRecognitionStatus">
+        <i class="fas fa-microphone"></i> Listening...
+    </div>
+
+    <!-- TensorFlow.js and COCO-SSD Model Libraries from CDN -->
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
 
     <script>
-        // DOM Elements
+        // --- DOM Element References ---
         const video = document.getElementById("video");
         const canvas = document.getElementById("canvas");
         const ctx = canvas.getContext("2d");
@@ -75,24 +151,45 @@
         const datetimeEl = document.getElementById("datetime");
         const objectEl = document.getElementById("object");
         const proximityStatusEl = document.getElementById("proximityStatus");
+        const muteToggleButton = document.getElementById("muteToggleButton");
+        const emergencyCallButton = document.getElementById("emergencyCallButton");
+        const speechRecognitionStatusEl = document.getElementById("speechRecognitionStatus");
 
-        // AI Model and Speech Variables
+        // --- Global Variables for AI Model and Speech ---
         let model;
-        let lastSpokenFullInfo = "";
-        let speaking = false;
-        const SPEECH_COOLDOWN_FULL_INFO = 50000; // 50 seconds for full info speech
-        const SPEECH_COOLDOWN_WARNING = 3000; // 3 seconds for warning speech
-        let lastFullInfoSpeechTime = 0;
-        let lastWarningSpeechTime = 0;
+        let lastSpokenFullInfo = ""; // Stores last spoken full info text to avoid repetition
+        let speaking = false; // Flag to indicate if speech synthesis is currently active
+        let isMuted = false; // Controls general app speech (emergency warnings bypass this)
 
-        // Performance Optimization Variables
+        // Speech cooldown periods to prevent rapid-fire alerts
+        const SPEECH_COOLDOWN_FULL_INFO = 50000; // 50 seconds cooldown for periodic info updates
+        const SPEECH_COOLDOWN_WARNING = 3000; // 3 seconds cooldown for proximity warnings
+        let lastFullInfoSpeechTime = 0; // Timestamp of last full info speech
+        let lastWarningSpeechTime = 0; // Timestamp of last warning speech
+
+        // --- Performance Optimization Variables ---
         let frameCount = 0;
-        const FRAMES_TO_SKIP = 2; // Process every 3rd frame (0, 1, 2 -> process 2)
+        const FRAMES_TO_SKIP = 2; // Process AI detection every 3rd frame (0, 1, 2 -> process 2)
 
-        // Proximity Warning Threshold (Adjust this value)
+        // --- Proximity Warning Threshold ---
+        // Adjust this value: a larger number means the person needs to be physically closer
+        // for the "VERY CLOSE!" warning to trigger (based on bounding box height).
         const PROXIMITY_THRESHOLD_HEIGHT = 450;
 
+        // --- Web Speech Recognition API Setup ---
+        // Provides voice-to-text functionality for emergency commands
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        let recognition; // Instance of SpeechRecognition
+        let emergencySpeechRecognitionActive = false; // Flag to manage recognition state
+        let emergencyCallState = 'IDLE'; // State machine for emergency SMS process
+        // States: 'IDLE', 'PROMPT_NUMBER_START', 'LISTENING_FOR_DIGITS', 'NUMBER_COLLECTED_CONFIRMATION', 'LISTENING_FOR_CONFIRMATION'
+        let currentEmergencyNumber = ''; // Stores digits spoken by user for emergency SMS
+        const EMERGENCY_TIMEOUT_MS = 10000; // 10 seconds for user to respond during emergency flow
+        let emergencyTimeoutId; // Timeout ID for emergency response waits
+        let userLocation = null; // Stores approximate user location for inclusion in SMS
+
         // --- PWA Service Worker Registration ---
+        // Registers the service worker for offline capabilities and PWA features.
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
                 navigator.serviceWorker.register('service-worker.js')
@@ -106,9 +203,11 @@
         }
 
         /**
-         * Converts text to speech, with cooldowns to prevent rapid-fire alerts.
-         * @param {string} text The text to speak.
-         * @param {string} type 'fullInfo' for periodic updates, 'warning' for immediate alerts.
+         * Text-to-Speech (TTS) Function.
+         * Handles speaking text, applies cooldowns, and manages mute state.
+         * Emergency type speech bypasses the mute setting.
+         * @param {string} text The text string to be spoken.
+         * @param {string} type The type of speech ('fullInfo', 'warning', 'emergency').
          */
         function speak(text, type = 'fullInfo') {
             console.log(`[TTS Debug] Attempting to speak (${type}): "${text}"`);
@@ -116,27 +215,40 @@
             let currentCooldown = 0;
             let lastSpeechTimeRef = 0;
 
+            // Determine cooldown and last speech time based on type
             if (type === 'fullInfo') {
                 currentCooldown = SPEECH_COOLDOWN_FULL_INFO;
                 lastSpeechTimeRef = lastFullInfoSpeechTime;
             } else if (type === 'warning') {
                 currentCooldown = SPEECH_COOLDOWN_WARNING;
                 lastSpeechTimeRef = lastWarningSpeechTime;
+            } else if (type === 'emergency') {
+                currentCooldown = 0; // Emergency alerts have no cooldown
             }
 
+            // Block speech if muted (unless it's an emergency alert)
+            if (isMuted && type !== 'emergency') {
+                console.log(`[TTS Debug] Speech (${type}) blocked: Muted.`);
+                return;
+            }
+
+            // Block speech if another speech is active or within cooldown
             if (speaking || (Date.now() - lastSpeechTimeRef < currentCooldown)) {
                 console.log(`[TTS Debug] Speech (${type}) blocked due to cooldown or already speaking.`);
                 return;
             }
 
-            if (type === 'warning' && speechSynthesis.speaking) {
+            // For emergency speech, cancel any ongoing speech to ensure it plays immediately
+            if (type === 'emergency' && speechSynthesis.speaking) {
                 speechSynthesis.cancel();
-                console.log("[TTS Debug] Cancelled ongoing speech for warning.");
-            } else if (type === 'fullInfo' && speechSynthesis.speaking) {
-                console.log("[TTS Debug] Full info speech deferred, another speech is active.");
+                console.log("[TTS Debug] Cancelled ongoing speech for emergency.");
+            } else if (type !== 'emergency' && speechSynthesis.speaking) {
+                // If other type of speech is requested while something else is speaking, defer it
+                console.log(`[TTS Debug] Speech (${type}) deferred, another speech is active.`);
                 return;
             }
 
+            // Get available voices on the device
             const voices = speechSynthesis.getVoices();
             if (voices.length === 0) {
                 console.warn("[TTS Debug] No speech synthesis voices available on this device.");
@@ -147,10 +259,11 @@
                  console.log("[TTS Debug] Available voices:", voices.map(v => v.name));
             }
 
-
+            // Create a new SpeechSynthesisUtterance object
             const utterance = new SpeechSynthesisUtterance(text);
-            utterance.lang = "en-IN";
+            utterance.lang = "en-IN"; // Set language to Indian English
 
+            // Try to find a specific Indian English voice for better pronunciation
             const indianVoice = voices.find(voice => voice.lang === 'en-IN' || voice.lang === 'en-GB' || voice.name.includes('India'));
             if (indianVoice) {
                 utterance.voice = indianVoice;
@@ -159,13 +272,16 @@
                 console.warn("[TTS Debug] No specific Indian/GB English voice found, using default.");
             }
 
-            utterance.rate = 1.0;
-            utterance.pitch = 1.0;
-            utterance.volume = 1.0;
+            // Speech properties
+            utterance.rate = 1.0;  // Normal speed (0.1 to 10)
+            utterance.pitch = 1.0; // Normal pitch (0 to 2)
+            utterance.volume = 1.0; // Full volume (0 to 1)
 
+            // Event handlers for speech lifecycle
             utterance.onstart = () => { speaking = true; console.log("[TTS Debug] Speech started."); };
             utterance.onend = () => {
                 speaking = false;
+                // Update last speech time based on type
                 if (type === 'fullInfo') {
                     lastFullInfoSpeechTime = Date.now();
                 } else if (type === 'warning') {
@@ -178,8 +294,24 @@
                 speaking = false;
             };
 
+            // Speak the utterance
             speechSynthesis.speak(utterance);
         }
+
+        // --- Mute/Unmute Toggle Button Functionality ---
+        muteToggleButton.addEventListener('click', () => {
+            isMuted = !isMuted; // Toggle mute state
+            if (isMuted) {
+                muteToggleButton.innerHTML = '<i class="fas fa-volume-mute"></i>'; // Change icon to mute
+                muteToggleButton.classList.add('muted'); // Add muted style class
+                speak("Muted", 'emergency'); // Speak "Muted" (bypasses global mute)
+            } else {
+                muteToggleButton.innerHTML = '<i class="fas fa-volume-up"></i>'; // Change icon to unmute
+                muteToggleButton.classList.remove('muted'); // Remove muted style class
+                speak("Unmuted", 'emergency'); // Speak "Unmuted"
+            }
+            console.log(`Speech is now ${isMuted ? 'muted' : 'unmuted'}.`);
+        });
 
         // --- Date and Time Update ---
         function updateDateTime() {
@@ -188,161 +320,404 @@
             const time = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
             datetimeEl.textContent = `📅 ${date} | ⏰ ${time}`;
         }
-        setInterval(updateDateTime, 1000);
-        updateDateTime();
+        setInterval(updateDateTime, 1000); // Update every second
+        updateDateTime(); // Initial call to display immediately
 
         // --- Camera Setup ---
         async function setupCamera() {
             try {
+                // Request video stream from the user's camera
                 const stream = await navigator.mediaDevices.getUserMedia({
                     video: {
-                        facingMode: 'environment', // CHANGED: Less strict than { exact: "environment" }
-                        width: { ideal: 640 },
+                        facingMode: 'environment', // Prioritize the rear camera ('user' for front camera)
+                        width: { ideal: 640 }, // Request ideal resolution for performance and quality
                         height: { ideal: 480 }
                     },
-                    audio: false
+                    audio: false // We don't need audio input from this stream
                 });
-                video.srcObject = stream;
+                video.srcObject = stream; // Assign the stream to the video element
+
                 return new Promise((resolve) => {
                     video.onloadedmetadata = () => {
-                        video.play();
-                        resizeCanvas();
-                        resolve(video);
+                        video.play(); // Start playing the video stream
+                        resizeCanvas(); // Adjust canvas size to match video
+                        resolve(video); // Resolve the promise with the video element
                     };
                 });
             } catch (error) {
                 console.error("Error accessing camera:", error);
                 let errorMessage = "❌ Camera access denied or not available.";
                 if (error.name === "NotAllowedError") {
-                    errorMessage += " Please grant camera permissions.";
+                    errorMessage += " Please grant camera permissions."; // Specific message for permission denial
                 } else if (error.name === "NotFoundError") {
-                    errorMessage += " No suitable camera found.";
+                    errorMessage += " No suitable camera found."; // Specific message if no camera is found
                 }
-                statusEl.textContent = errorMessage;
-                statusEl.style.color = 'red';
-                return null;
+                statusEl.textContent = errorMessage; // Display error message in status area
+                statusEl.style.color = 'red'; // Set error message color to red
+                return null; // Indicate camera setup failed
             }
         }
 
         // --- Canvas Resizing ---
+        // Ensures the canvas matches the video stream's actual dimensions for correct drawing.
         function resizeCanvas() {
             canvas.width = video.videoWidth;
             canvas.height = video.videoHeight;
         }
 
         // --- Main Object Detection Loop ---
+        // Continuously detects objects in the video stream and updates the UI.
         async function detectFrame() {
-            if (video.readyState < 2) {
-                requestAnimationFrame(detectFrame);
+            if (video.readyState < 2) { // Ensure video stream is fully loaded and ready
+                requestAnimationFrame(detectFrame); // Request next frame if not ready
                 return;
             }
 
+            // Frame skipping for performance: only process every (FRAMES_TO_SKIP + 1) frame
             frameCount++;
             if (frameCount % (FRAMES_TO_SKIP + 1) !== 0) {
-                requestAnimationFrame(detectFrame);
+                requestAnimationFrame(detectFrame); // Skip this frame and request the next
                 return;
             }
 
             let predictions;
             try {
-                if (model) {
+                // Perform object detection on the video frame. This is an asynchronous operation.
+                if (model) { // Ensure model is loaded before attempting detection
                     predictions = await model.detect(video);
                 } else {
-                    requestAnimationFrame(detectFrame);
+                    requestAnimationFrame(detectFrame); // If model not loaded, skip and try next frame
                     return;
                 }
             } catch (e) {
                 console.error("Error during model detection (async part):", e);
-                requestAnimationFrame(detectFrame);
+                requestAnimationFrame(detectFrame); // Log error and continue to next frame
                 return;
             }
 
+            // Use tf.tidy for synchronous TensorFlow.js operations (like drawing)
+            // to automatically manage and dispose of intermediate tensors, preventing memory leaks.
             tf.tidy(() => {
-                ctx.clearRect(0, 0, canvas.width, canvas.height);
-                // No need to draw video on canvas if object-fit:cover is used for video element itself
+                ctx.clearRect(0, 0, canvas.width, canvas.height); // Clear previous drawings on canvas
+                // The video element itself is set to object-fit: cover, so drawing it on canvas
+                // as a background here is often not necessary and can be skipped for performance.
                 // ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
                 let personDetected = false;
                 let isPersonClose = false;
                 let detectedObjectsText = "👁️ No objects detected.";
 
+                // Iterate over all detected objects
                 predictions.forEach(pred => {
+                    // Process only predictions with confidence score > 60%
                     if (pred.score > 0.6) {
-                        const [x, y, width, height] = pred.bbox;
+                        const [x, y, width, height] = pred.bbox; // Bounding box coordinates and dimensions
+
+                        // Draw bounding box (green by default)
                         ctx.strokeStyle = "#00FF00";
                         ctx.lineWidth = 2;
                         ctx.strokeRect(x, y, width, height);
 
+                        // Draw label text (e.g., "Person (95%)")
                         ctx.fillStyle = "#00FF00";
                         ctx.font = '16px sans-serif';
                         ctx.fillText(`${pred.class} (${Math.round(pred.score * 100)}%)`, x, y > 10 ? y - 5 : 10);
 
-                        detectedObjectsText = `👁️ I see a ${pred.class}`;
+                        detectedObjectsText = `👁️ I see a ${pred.class}`; // Update detected object display
 
+                        // Check specifically for 'person' class for proximity warning
                         if (pred.class === 'person') {
                             personDetected = true;
+                            // Trigger "very close" warning if person's bounding box height exceeds threshold
                             if (height > PROXIMITY_THRESHOLD_HEIGHT) {
                                 isPersonClose = true;
+                                // Change drawing style for "very close" warning to red and thicker
                                 ctx.strokeStyle = 'red';
                                 ctx.lineWidth = 4;
                                 ctx.strokeRect(x, y, width, height);
                                 ctx.fillStyle = 'red';
-                                ctx.fillText(`VERY CLOSE!`, x, y + height + 20);
+                                ctx.fillText(`VERY CLOSE!`, x, y + height + 20); // Add "VERY CLOSE!" text
                             }
                         }
                     }
                 });
 
-                objectEl.textContent = detectedObjectsText;
+                objectEl.textContent = detectedObjectsText; // Update displayed object status
 
+                // Update proximity status text and trigger speech alerts
                 if (isPersonClose) {
-                    proximityStatusEl.className = 'warning-text';
+                    proximityStatusEl.className = 'warning-text'; // Apply red style
                     proximityStatusEl.textContent = "🔴 WARNING: Person very close!";
-                    speak("Warning: Person very close.", 'warning');
+                    speak("Warning: Person very close.", 'warning'); // Trigger warning speech
                 } else if (personDetected) {
-                    proximityStatusEl.className = '';
+                    proximityStatusEl.className = ''; // Remove warning style
                     proximityStatusEl.textContent = "🟢 Person detected";
+                    // No speech for simple person detection
                 } else {
-                    proximityStatusEl.className = '';
+                    proximityStatusEl.className = ''; // No warning, no person detected
                     proximityStatusEl.textContent = "🟢 No person detected";
                 }
             });
 
-            requestAnimationFrame(detectFrame);
+            requestAnimationFrame(detectFrame); // Request the next animation frame to continue the loop
         }
+
+        // --- Emergency SMS Features ---
+
+        /**
+         * Attempts to get the user's approximate geographical location.
+         * Stores it in `userLocation` variable.
+         */
+        function getUserLocation() {
+            if (navigator.geolocation) {
+                // Request current position with options for accuracy and timeout
+                navigator.geolocation.getCurrentPosition(position => {
+                    userLocation = {
+                        latitude: position.coords.latitude.toFixed(4),
+                        longitude: position.coords.longitude.toFixed(4)
+                    };
+                    console.log("[Location Debug] User location:", userLocation);
+                }, error => {
+                    console.error("[Location Debug] Error getting location:", error);
+                    userLocation = null; // Clear location if error occurs
+                }, { enableHighAccuracy: false, timeout: 5000, maximumAge: 0 }); // Low accuracy, fast timeout
+            } else {
+                console.warn("[Location Debug] Geolocation not supported by browser.");
+                userLocation = null;
+            }
+        }
+
+        /**
+         * Initiates the voice-guided emergency SMS process.
+         */
+        function startEmergencySMSProcess() {
+            if (!SpeechRecognition) {
+                speak("Voice command for emergency is not supported in this browser. Please use your phone's messaging app manually.", 'emergency');
+                return;
+            }
+            if (emergencySpeechRecognitionActive) {
+                speak("Emergency process already active.", 'emergency');
+                return;
+            }
+
+            speak("Please speak the 10-digit phone number, digit by digit.", 'emergency');
+            currentEmergencyNumber = ''; // Reset the number
+            emergencyCallState = 'LISTENING_FOR_DIGITS'; // Set state to listen for digits
+            emergencySpeechRecognitionActive = true; // Activate recognition flag
+            speechRecognitionStatusEl.innerHTML = '<i class="fas fa-microphone"></i> Listening for number...';
+            speechRecognitionStatusEl.style.display = 'block'; // Show listening status
+
+            recognition.start(); // Start speech recognition
+            clearTimeout(emergencyTimeoutId); // Clear any previous timeout
+            // Set a timeout for the user's initial response
+            emergencyTimeoutId = setTimeout(() => {
+                handleEmergencyTimeout();
+            }, EMERGENCY_TIMEOUT_MS);
+
+            console.log("[SR Debug] Started listening for digits.");
+        }
+
+        /**
+         * Handles timeouts during the emergency SMS process.
+         */
+        function handleEmergencyTimeout() {
+            recognition.stop(); // Stop recognition
+            speak("No response. Emergency SMS process cancelled.", 'emergency');
+            resetEmergencyState(); // Reset emergency state
+            console.log("[SR Debug] Emergency process timed out.");
+        }
+
+        /**
+         * Resets the emergency SMS process state variables.
+         */
+        function resetEmergencyState() {
+            emergencyCallState = 'IDLE';
+            currentEmergencyNumber = '';
+            emergencySpeechRecognitionActive = false;
+            speechRecognitionStatusEl.style.display = 'none'; // Hide listening status
+            clearTimeout(emergencyTimeoutId); // Clear any pending timeout
+            if (recognition) {
+                recognition.stop(); // Ensure recognition is stopped if active
+            }
+            console.log("[SR Debug] Emergency state reset to IDLE.");
+        }
+
+        /**
+         * Sets up the Web Speech Recognition API specifically for the emergency flow.
+         */
+        function setupSpeechRecognitionForEmergency() {
+            if (!SpeechRecognition) return; // Exit if API not supported
+
+            recognition = new SpeechRecognition();
+            recognition.continuous = false; // Listen for one phrase at a time
+            recognition.interimResults = false; // Don't return interim (partial) results
+            recognition.lang = 'en-IN'; // Set recognition language to Indian English
+
+            // Event handler when speech recognition starts
+            recognition.onstart = () => {
+                speechRecognitionStatusEl.style.display = 'block'; // Show listening status
+                console.log("[SR Debug] Recognition started for emergency flow. State:", emergencyCallState);
+                clearTimeout(emergencyTimeoutId); // Clear any old timeout on start
+            };
+
+            // Event handler for speech recognition results
+            recognition.onresult = (event) => {
+                const transcript = event.results[0][0].transcript.toLowerCase(); // Get recognized text
+                console.log("[SR Debug] Recognized:", transcript, "State:", emergencyCallState);
+                clearTimeout(emergencyTimeoutId); // Clear timeout as user responded
+
+                if (emergencyCallState === 'LISTENING_FOR_DIGITS') {
+                    // Normalize transcript to find digits more robustly (e.g., "one" to "1")
+                    const normalizedTranscript = transcript
+                        .replace(/zero/g, '0').replace(/one/g, '1').replace(/two/g, '2').replace(/three/g, '3')
+                        .replace(/four/g, '4').replace(/five/g, '5').replace(/six/g, '6').replace(/seven/g, '7')
+                        .replace(/eight/g, '8').replace(/nine/g, '9');
+                    
+                    const digits = normalizedTranscript.match(/\d/g); // Extract all digits from the transcript
+
+                    if (digits) {
+                        currentEmergencyNumber += digits.join(''); // Append recognized digits
+                        console.log("[SR Debug] Current number:", currentEmergencyNumber);
+
+                        if (currentEmergencyNumber.length < 10) {
+                            // If less than 10 digits, prompt for more
+                            speak(`You said ${transcript}. Current number is ${currentEmergencyNumber}. Please continue.`, 'emergency');
+                            speechRecognitionStatusEl.innerHTML = `Number: ${currentEmergencyNumber} | <i class="fas fa-microphone"></i> Listening...`;
+                            recognition.start(); // Restart listening for more digits
+                            emergencyTimeoutId = setTimeout(handleEmergencyTimeout, EMERGENCY_TIMEOUT_MS);
+                        } else {
+                            // If 10 or more digits, trim to 10 and ask for confirmation
+                            currentEmergencyNumber = currentEmergencyNumber.substring(0, 10);
+                            speak(`You said ${currentEmergencyNumber}. Is this correct? Say send to confirm, or correct to re-enter.`, 'emergency');
+                            emergencyCallState = 'NUMBER_COLLECTED_CONFIRMATION'; // Change state
+                            speechRecognitionStatusEl.innerHTML = `Confirm: ${currentEmergencyNumber} | <i class="fas fa-microphone"></i> Listening...`;
+                            recognition.start(); // Listen for confirmation
+                            emergencyTimeoutId = setTimeout(handleEmergencyTimeout, EMERGENCY_TIMEOUT_MS);
+                        }
+                    } else if (transcript.includes("cancel")) {
+                        // Allow user to cancel at this stage
+                        speak("Emergency SMS process cancelled.", 'emergency');
+                        resetEmergencyState();
+                    } else {
+                        // If no digits recognized, reprompt
+                        speak("I didn't hear any digits. Please speak the 10-digit phone number, digit by digit.", 'emergency');
+                        speechRecognitionStatusEl.innerHTML = '<i class="fas fa-microphone"></i> Listening for number...';
+                        recognition.start(); // Restart listening for digits
+                        emergencyTimeoutId = setTimeout(handleEmergencyTimeout, EMERGENCY_TIMEOUT_MS);
+                    }
+                } else if (emergencyCallState === 'NUMBER_COLLECTED_CONFIRMATION') {
+                    // Handle user's confirmation
+                    if (transcript.includes("send") || transcript.includes("yes")) {
+                        initiateSMS(currentEmergencyNumber); // Initiate SMS if confirmed
+                        resetEmergencyState(); // Reset state
+                    } else if (transcript.includes("correct") || transcript.includes("no") || transcript.includes("clear")) {
+                        // Allow user to correct/re-enter number
+                        speak("Okay, please re-enter the 10-digit number, digit by digit.", 'emergency');
+                        currentEmergencyNumber = ''; // Reset number
+                        emergencyCallState = 'LISTENING_FOR_DIGITS'; // Go back to listening for digits
+                        speechRecognitionStatusEl.innerHTML = '<i class="fas fa-microphone"></i> Listening for number...';
+                        recognition.start(); // Restart listening
+                        emergencyTimeoutId = setTimeout(handleEmergencyTimeout, EMERGENCY_TIMEOUT_MS);
+                    } else {
+                        // If confirmation not understood, reprompt
+                        speak(`I did not understand your confirmation. Say send or correct.`, 'emergency');
+                        speechRecognitionStatusEl.innerHTML = `Confirm: ${currentEmergencyNumber} | <i class="fas fa-microphone"></i> Listening...`;
+                        recognition.start(); // Restart listening for confirmation
+                        emergencyTimeoutId = setTimeout(handleEmergencyTimeout, EMERGENCY_TIMEOUT_MS);
+                    }
+                }
+            };
+
+            // Event handler for speech recognition errors
+            recognition.onerror = (event) => {
+                console.error("[SR Debug] Speech recognition error:", event.error, event.message);
+                speechRecognitionStatusEl.style.display = 'none'; // Hide listening status on error
+                if (event.error === 'no-speech') {
+                    // 'no-speech' indicates silence, handled by explicit timeout.
+                } else if (event.error === 'not-allowed') {
+                    speak("Microphone permission denied. Cannot use voice commands for emergency.", 'emergency');
+                } else if (event.error === 'network') {
+                    speak("Speech recognition requires an internet connection.", 'emergency');
+                } else {
+                    speak("A speech recognition error occurred. Please try again.", 'emergency');
+                }
+                resetEmergencyState(); // Reset state on most errors
+            };
+
+            // Event handler when speech recognition ends
+            recognition.onend = () => {
+                // Only hide status if not actively waiting for a response in the emergency flow
+                if (emergencyCallState === 'IDLE' || emergencyCallState === 'NUMBER_COLLECTED_CONFIRMATION') {
+                     // Keep listening if awaiting confirmation (recognition.start() will be called again)
+                } else {
+                    speechRecognitionStatusEl.style.display = 'none';
+                }
+                console.log("[SR Debug] Recognition session ended. State:", emergencyCallState);
+            };
+        }
+
+        /**
+         * Opens the device's default messaging app with a pre-filled SMS.
+         * Note: Cannot send SMS directly; user must tap "Send" in the app.
+         * @param {string} phoneNumber The recipient's 10-digit phone number.
+         */
+        function initiateSMS(phoneNumber) {
+            let message = "Emergency! I need assistance.";
+            // Add approximate location to message if available
+            if (userLocation) {
+                message += ` My approximate location is https://maps.google.com/?q=${userLocation.latitude},${userLocation.longitude}`;
+            }
+
+            // Construct the SMS URL using 'sms:' URI scheme
+            const smsUrl = `sms:${phoneNumber}?body=${encodeURIComponent(message)}`;
+            window.location.href = smsUrl; // Redirect to open the messaging app
+
+            // Inform the user about the manual sending step
+            speak("Opening your messaging app to send the SMS. Please review the message and tap send.", 'emergency');
+            console.log("[SMS Debug] SMS URL generated:", smsUrl);
+        }
+
+        // --- Emergency Button Event Listener ---
+        emergencyCallButton.addEventListener('click', () => {
+            // Attempt to get location before starting the SMS process
+            getUserLocation();
+            startEmergencySMSProcess(); // Start the voice-guided SMS flow
+        });
+
 
         // --- Initial App Load Function ---
         async function main() {
             statusEl.textContent = "🔄 Loading AI model...";
-            // Delay for voices to load, and to potentially satisfy autoplay policy with a slight wait
-            await new Promise(resolve => setTimeout(resolve, 500)); // Wait 0.5 seconds
+            // Delay to allow browser to prepare SpeechSynthesis voices and potentially satisfy autoplay policy
+            await new Promise(resolve => setTimeout(resolve, 500));
 
-            // Explicitly call getVoices AFTER a short delay.
-            // Some browsers require a microtask to complete before voices are fully registered.
+            // Set up listener for when voices are loaded/changed
             speechSynthesis.onvoiceschanged = () => {
                 console.log("[TTS Debug] Voices loaded event fired. Voices:", speechSynthesis.getVoices().map(v => v.name));
             };
-            // Call getVoices immediately to populate the list if already ready
+            // Call getVoices immediately to populate the list if they're already ready
             speechSynthesis.getVoices();
 
-
-            await setupCamera();
-            if (!video.srcObject) {
+            await setupCamera(); // Set up camera
+            if (!video.srcObject) { // If camera setup fails, stop main execution
                 console.error("Camera setup failed, aborting main execution.");
                 return;
             }
 
+            // Load the COCO-SSD AI model (lite_mobilenet_v2 for performance)
             model = await cocoSsd.load({base: 'lite_mobilenet_v2'});
             statusEl.textContent = "✅ AI model loaded!";
 
-            // Initial full information speech after model loads
-            speakFullInformation(); // Call once initially
-            setInterval(speakFullInformation, SPEECH_COOLDOWN_FULL_INFO); // Then periodically
+            setupSpeechRecognitionForEmergency(); // Initialize speech recognition for emergency commands
 
-            detectFrame();
+            // Initial full information speech and set up periodic intervals
+            speakFullInformation();
+            setInterval(speakFullInformation, SPEECH_COOLDOWN_FULL_INFO);
+
+            detectFrame(); // Start the continuous object detection loop
         }
 
-        // Function to combine all info for periodic speech
+        // --- Function to combine all displayed info for periodic speech ---
         function speakFullInformation() {
             const combinedText = `
                 Status: ${statusEl.textContent}.
@@ -350,14 +725,16 @@
                 Date and Time: ${datetimeEl.textContent}.
                 Object detection: ${objectEl.textContent}.
                 Proximity status: ${proximityStatusEl.textContent}.
-            `.replace(/\s+/g, ' ').trim();
+            `.replace(/\s+/g, ' ').trim(); // Clean up extra spaces
 
+            // Only speak if the combined text has changed since the last full info speech
             if (combinedText !== lastSpokenFullInfo) {
                  speak(combinedText, 'fullInfo');
                  lastSpokenFullInfo = combinedText;
             }
         }
 
+        // Start the application once the DOM is fully loaded
         document.addEventListener('DOMContentLoaded', main);
     </script>
 </body>
