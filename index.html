@@ -83,11 +83,11 @@
     <video id="video" autoplay playsinline muted></video>
     <canvas id="canvas"></canvas>
     <div id="info">
-        <div id="status"> Loading AI model...</div>
-        <div id="weather">Temp: 35°C | Wind: 15 km/h | Sunny</div> <!-- Static weather display -->
+        <div id="status">🔄 Loading AI model...</div>
+        <div id="weather">🌡️ Temp: 35°C | 🌬️ Wind: 15 km/h | Sunny</div> <!-- Static weather display -->
         <div id="datetime"></div>
-        <div id="object"> Waiting for detection...</div>
-        <div id="proximityStatus" style="color: limegreen;">No person detected</div>
+        <div id="object">👁️ Waiting for detection...</div>
+        <div id="proximityStatus" style="color: limegreen;">🟢 No person detected</div>
     </div>
 
     <!-- Speech Recognition Status Display - Always visible for continuous listening -->
@@ -138,11 +138,31 @@
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
         let recognition; // Instance of SpeechRecognition
         let emergencyCallState = 'IDLE'; // State machine for emergency SMS process
-        // States: 'IDLE', 'PROMPT_NUMBER_START', 'LISTENING_FOR_DIGITS', 'NUMBER_COLLECTED_CONFIRMATION', 'LISTENING_FOR_CONFIRMATION'
+        // States: 'IDLE', 'PROMPT_INITIAL_NUMBER', 'LISTENING_FOR_DIGITS', 'NUMBER_COLLECTED_CONFIRMATION'
         let currentEmergencyNumber = ''; // Stores digits spoken by user for emergency SMS
         const EMERGENCY_TIMEOUT_MS = 10000; // 10 seconds for user to respond during emergency flow
         let emergencyTimeoutId; // Timeout ID for emergency response waits
         let userLocation = null; // Stores approximate user location for inclusion in SMS
+
+        // --- Emergency Contact Persistence ---
+        const EMERGENCY_CONTACT_KEY = 'safevision_emergency_contact';
+
+        /**
+         * Loads the emergency contact number from localStorage.
+         * @returns {string|null} The stored number or null if not found.
+         */
+        function loadEmergencyContact() {
+            return localStorage.getItem(EMERGENCY_CONTACT_KEY);
+        }
+
+        /**
+         * Saves the emergency contact number to localStorage.
+         * @param {string} number The 10-digit number to save.
+         */
+        function saveEmergencyContact(number) {
+            localStorage.setItem(EMERGENCY_CONTACT_KEY, number);
+            console.log("[Emergency Contact] Number saved:", number);
+        }
 
         // --- PWA Service Worker Registration ---
         // Registers the service worker for offline capabilities and PWA features.
@@ -208,7 +228,7 @@
             const voices = speechSynthesis.getVoices();
             if (voices.length === 0) {
                 console.warn("[TTS Debug] No speech synthesis voices available on this device.");
-                statusEl.textContent = " Speech not available (no voices)";
+                statusEl.textContent = "❌ Speech not available (no voices)";
                 statusEl.style.color = 'red';
                 return;
             } else {
@@ -259,7 +279,7 @@
             const now = new Date();
             const date = now.toDateString();
             const time = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-            datetimeEl.textContent = ` ${date} |  ${time}`;
+            datetimeEl.textContent = `📅 ${date} | ⏰ ${time}`;
         }
         setInterval(updateDateTime, 1000); // Update every second
         updateDateTime(); // Initial call to display immediately
@@ -319,7 +339,7 @@
             if (frameCount % (FRAMES_TO_SKIP + 1) !== 0) {
                 requestAnimationFrame(detectFrame); // Skip this frame and request the next
                 return;
-                }
+            }
 
             let predictions;
             try {
@@ -429,27 +449,32 @@
         }
 
         /**
-         * Initiates the voice-guided emergency SMS process.
+         * Initiates the voice-guided emergency SMS process (for setup or actual emergency).
+         * @param {boolean} isInitialSetup True if this is the first time setting the number.
          */
-        function startEmergencySMSProcess() {
+        function startEmergencySMSProcess(isInitialSetup = false) {
             if (!SpeechRecognition) {
-                speak("Voice command for emergency is not supported in this browser. Please use your phone's messaging app manually.", 'emergency');
+                speak("Voice commands are not supported in this browser. Please use your phone's messaging app manually.", 'emergency');
                 return;
             }
             
-            // NEW: Stop continuous recognition temporarily
+            // NEW: Stop continuous recognition temporarily AND clear the periodic full info interval
             if (recognition) {
                 recognition.stop();
                 recognition.continuous = false; // Set to false for single-phrase listening in emergency flow
             }
-
-            // NEW: Clear the periodic full info interval
             clearInterval(fullInfoIntervalId); 
             console.log("[SR Debug] Full info speaking paused.");
 
-            speak("Please speak the 10-digit phone number, digit by digit.", 'emergency');
-            currentEmergencyNumber = ''; // Reset the number
+            currentEmergencyNumber = ''; // Reset the number for new input
             emergencyCallState = 'LISTENING_FOR_DIGITS'; // Set state to listen for digits
+
+            if (isInitialSetup) {
+                speak("Welcome to SafeVision. First, please speak the 10-digit emergency contact number, digit by digit. This number will be saved.", 'emergency');
+            } else {
+                speak("Please speak the 10-digit phone number, digit by digit.", 'emergency');
+            }
+            
             speechRecognitionStatusEl.innerHTML = '<i class="fas fa-microphone"></i> Listening for number...';
             
             recognition.start(); // Start speech recognition for number input
@@ -480,7 +505,9 @@
         function resetEmergencyState() {
             emergencyCallState = 'IDLE';
             currentEmergencyNumber = '';
-            speechRecognitionStatusEl.innerHTML = '<i class="fas fa-microphone"></i> Listening for commands...'; // Revert status
+            // Only update status bar if not during the initial setup/number collection phase.
+            // When going back to IDLE, the continuous listener will set the appropriate status.
+            speechRecognitionStatusEl.innerHTML = '<i class="fas fa-microphone"></i> Listening for commands...'; 
             clearTimeout(emergencyTimeoutId); // Clear any pending timeout
             // Don't stop recognition here, let continuous mode handle it
             console.log("[SR Debug] Emergency state reset to IDLE.");
@@ -527,7 +554,7 @@
                     if (isFinal) {
                         console.log("[SR Debug] Final recognized:", transcript, "State:", emergencyCallState);
 
-                        // --- Mute/Unmute Commands (Always active if in IDLE state) ---
+                        // --- Main Command Handling (IDLE state) ---
                         if (emergencyCallState === 'IDLE') {
                             if (transcript.includes("mute")) {
                                 isMuted = true;
@@ -543,11 +570,23 @@
                                 speechRecognitionStatusEl.innerHTML = `<i class="fas fa-microphone"></i> Listening for commands...`;
                                 continue;
                             }
-                            // --- Emergency Command (Always active if in IDLE state) ---
                             if (transcript.includes("emergency")) {
                                 getUserLocation(); // Get location for SMS
-                                startEmergencySMSProcess();
-                                // Do not `break` or `return` here, let the onend handler restart continuous listening
+                                // Check if number is set before starting full SMS process
+                                const storedNumber = loadEmergencyContact();
+                                if (storedNumber && storedNumber.length === 10) {
+                                    speak(`Sending emergency SMS to ${storedNumber}.`, 'emergency');
+                                    // Add a slight delay to allow speech to finish before opening SMS app
+                                    setTimeout(() => initiateSMS(storedNumber), 2000); // 2-second delay
+                                } else {
+                                    speak("Emergency contact number is not set. Please say, change emergency number, to set it.", 'emergency');
+                                }
+                                return; // Exit onresult, new flow might start
+                            }
+                            // NEW: Change Emergency Number command
+                            if (transcript.includes("change emergency number") || transcript.includes("set emergency number")) {
+                                getUserLocation(); // Attempt to get location in case it's needed later
+                                startEmergencySMSProcess(false); // Start the number change flow (not initial setup)
                                 return; // Exit onresult, new flow starts
                             }
                         }
@@ -558,7 +597,8 @@
                             const normalizedTranscript = transcript
                                 .replace(/zero/g, '0').replace(/one/g, '1').replace(/two/g, '2').replace(/three/g, '3')
                                 .replace(/four/g, '4').replace(/five/g, '5').replace(/six/g, '6').replace(/seven/g, '7')
-                                .replace(/eight/g, '8').replace(/nine/g, '9');
+                                .replace(/eight/g, '8').replace(/nine/g, '9')
+                                .replace(/\s/g, ''); // Remove spaces if numbers are spoken individually but recognized as a phrase
                             
                             const digits = normalizedTranscript.match(/\d/g); // Extract all digits from the transcript
 
@@ -592,10 +632,12 @@
                                 emergencyTimeoutId = setTimeout(handleEmergencyTimeout, EMERGENCY_TIMEOUT_MS);
                             }
                         } else if (emergencyCallState === 'NUMBER_COLLECTED_CONFIRMATION') {
-                            if (transcript.includes("send") || transcript.includes("yes")) {
+                            if (transcript.includes("send") || transcript.includes("yes") || transcript.includes("confirm")) { // Added "confirm"
+                                saveEmergencyContact(currentEmergencyNumber); // NEW: Save the confirmed number
+                                speak("Emergency contact number saved. Opening your messaging app to send the SMS. Please review the message and tap send.", 'emergency');
                                 initiateSMS(currentEmergencyNumber);
                                 resetEmergencyState();
-                            } else if (transcript.includes("correct") || transcript.includes("no") || transcript.includes("clear")) {
+                            } else if (transcript.includes("correct") || transcript.includes("no") || transcript.includes("clear") || transcript.includes("redo")) { // Added "redo"
                                 speak("Okay, please re-enter the 10-digit number, digit by digit.", 'emergency');
                                 currentEmergencyNumber = '';
                                 emergencyCallState = 'LISTENING_FOR_DIGITS';
@@ -741,10 +783,21 @@
             statusEl.textContent = "✅ AI model loaded!";
 
             setupSpeechRecognition(); // Initialize speech recognition object
-            startContinuousRecognition(); // Explicitly start continuous listening for commands
 
+            // NEW: Check for existing emergency contact on first load
+            const storedEmergencyNumber = loadEmergencyContact();
+            if (!storedEmergencyNumber || storedEmergencyNumber.length !== 10) {
+                // If no valid number stored, prompt for it
+                speak("Welcome to SafeVision. First, please speak the 10-digit emergency contact number, digit by digit. This number will be saved.", 'emergency');
+                startEmergencySMSProcess(true); // True for initial setup
+            } else {
+                // Number already set, proceed with continuous listening
+                currentEmergencyNumber = storedEmergencyNumber; // Load it into current var
+                startContinuousRecognition(); // Explicitly start continuous listening for commands
+                speak("Welcome back to SafeVision.", 'fullInfo'); // Welcome message for returning users
+            }
+            
             // Initial full information speech and set up periodic intervals
-            speakFullInformation();
             fullInfoIntervalId = setInterval(speakFullInformation, SPEECH_COOLDOWN_FULL_INFO); // Store interval ID
 
             detectFrame(); // Start the continuous object detection loop
