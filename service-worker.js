@@ -1,43 +1,70 @@
-const CACHE_NAME = 'safevision-cache-v1.0';
+const CACHE_NAME = 'safevision-cache-v1';
 const urlsToCache = [
-  '/',
-  '/index.html',
-  '/manifest.json',
-  '/icon-192.png',
-  '/icon-512.png',
-  'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.3.0',
-  'https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd'
+  './', // Caches the root, i.e., index.html
+  './index.html',
+  './manifest.json',
+  './icon-192.png',
+  './icon-512.png',
+  // It's generally better to let CDN resources be fetched from network
+  // and not cache them aggressively here, unless you have specific offline requirements
+  // that justify the complexity of caching cross-origin resources.
+  // 'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs',
+  // 'https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd'
 ];
 
-// Install Service Worker
-self.addEventListener('install', function(event) {
+self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then(function(cache) {
-      return cache.addAll(urlsToCache);
-    })
+    caches.open(CACHE_NAME)
+      .then((cache) => {
+        console.log('Opened cache');
+        return cache.addAll(urlsToCache);
+      })
   );
 });
 
-// Activate and clean old caches
-self.addEventListener('activate', function(event) {
+self.addEventListener('fetch', (event) => {
+  event.respondWith(
+    caches.match(event.request)
+      .then((response) => {
+        // Cache hit - return response
+        if (response) {
+          return response;
+        }
+        return fetch(event.request).then(
+          function(response) {
+            // Check if we received a valid response
+            if(!response || response.status !== 200 || response.type !== 'basic') {
+              return response;
+            }
+
+            // IMPORTANT: Clone the response. A response is a stream
+            // and can only be consumed once. We must clone it so that
+            // the browser can consume the original response and we can consume the clone.
+            var responseToCache = response.clone();
+
+            caches.open(CACHE_NAME)
+              .then(function(cache) {
+                cache.put(event.request, responseToCache);
+              });
+
+            return response;
+          }
+        );
+      })
+  );
+});
+
+self.addEventListener('activate', (event) => {
+  const cacheWhitelist = [CACHE_NAME];
   event.waitUntil(
-    caches.keys().then(function(cacheNames) {
+    caches.keys().then((cacheNames) => {
       return Promise.all(
-        cacheNames.map(function(cacheName) {
-          if (cacheName !== CACHE_NAME) {
+        cacheNames.map((cacheName) => {
+          if (cacheWhitelist.indexOf(cacheName) === -1) {
             return caches.delete(cacheName);
           }
         })
       );
-    })
-  );
-});
-
-// Fetch from cache or network
-self.addEventListener('fetch', function(event) {
-  event.respondWith(
-    caches.match(event.request).then(function(response) {
-      return response || fetch(event.request);
     })
   );
 });
