@@ -1,11 +1,11 @@
 {
   "name": "SafeVision App",
   "short_name": "SafeVision",
-  "description": "Your personal AI assistant for object detection using live camera.",
-  "start_url": ".",
-  "display": "standalone",
-  "background_color": "#111111",
-  "theme_color": "#00ff00",
+  "description": "An assistive app for real-time person detection.",
+  "start_url": "./",
+  "display": "fullscreen",
+  "background_color": "#000000",
+  "theme_color": "#000000",
   "icons": [
     {
       "src": "icon-192.png",
