@@ -83,10 +83,10 @@
     <video id="video" autoplay playsinline muted></video>
     <canvas id="canvas"></canvas>
     <div id="info">
-        <div id="status"> Loading AI model...</div>
-        <div id="weather"> Temperature: 35°C |  Wind: 15 km/h | Sunny</div> <!-- Static weather display -->
+        <div id="status">🔄 Loading AI model...</div>
+        <div id="weather">🌡️ Temp: 35°C | 🌬️ Wind: 15 km/h | Sunny</div> <!-- Static weather display -->
         <div id="datetime"></div>
-        <div id="object"> Waiting for detection...</div>
+        <div id="object">👁️ Waiting for detection...</div>
         <div id="proximityStatus" style="color: limegreen;">🟢 No person detected</div>
     </div>
 
@@ -228,7 +228,7 @@
             const voices = speechSynthesis.getVoices();
             if (voices.length === 0) {
                 console.warn("[TTS Debug] No speech synthesis voices available on this device.");
-                statusEl.textContent = "Speech not available (no voices)";
+                statusEl.textContent = "❌ Speech not available (no voices)";
                 statusEl.style.color = 'red';
                 return;
             } else {
@@ -279,7 +279,7 @@
             const now = new Date();
             const date = now.toDateString();
             const time = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-            datetimeEl.textContent = ` ${date} |  ${time}`;
+            datetimeEl.textContent = `📅 ${date} | ⏰ ${time}`;
         }
         setInterval(updateDateTime, 1000); // Update every second
         updateDateTime(); // Initial call to display immediately
@@ -307,7 +307,7 @@
                 });
             } catch (error) {
                 console.error("Error accessing camera:", error);
-                let errorMessage = " Camera access denied or not available.";
+                let errorMessage = "❌ Camera access denied or not available.";
                 if (error.name === "NotAllowedError") {
                     errorMessage += " Please grant camera permissions."; // Specific message for permission denial
                 } else if (error.name === "NotFoundError") {
@@ -366,7 +366,7 @@
 
                 let personDetected = false;
                 let isPersonClose = false;
-                let detectedObjectsText = " No objects detected.";
+                let detectedObjectsText = "👁️ No objects detected.";
 
                 // Iterate over all detected objects
                 predictions.forEach(pred => {
@@ -384,7 +384,7 @@
                         ctx.font = '16px sans-serif';
                         ctx.fillText(`${pred.class} (${Math.round(pred.score * 100)}%)`, x, y > 10 ? y - 5 : 10);
 
-                        detectedObjectsText = ` I see a ${pred.class}`; // Update detected object display
+                        detectedObjectsText = `👁️ I see a ${pred.class}`; // Update detected object display
 
                         // Check specifically for 'person' class for proximity warning
                         if (pred.class === 'person') {
@@ -408,15 +408,15 @@
                 // Update proximity status text and trigger speech alerts
                 if (isPersonClose) {
                     proximityStatusEl.className = 'warning-text'; // Apply red style
-                    proximityStatusEl.textContent = " WARNING: Person very close!";
+                    proximityStatusEl.textContent = "🔴 WARNING: Person very close!";
                     speak("Warning: Person very close.", 'warning'); // Trigger warning speech
                 } else if (personDetected) {
                     proximityStatusEl.className = ''; // Remove warning style
-                    proximityStatusEl.textContent = " Person detected";
+                    proximityStatusEl.textContent = "🟢 Person detected";
                     // No speech for simple person detection
                 } else {
                     proximityStatusEl.className = ''; // No warning, no person detected
-                    proximityStatusEl.textContent = " No person detected";
+                    proximityStatusEl.textContent = "🟢 No person detected";
                 }
             });
 
@@ -452,7 +452,7 @@
          * Initiates the voice-guided emergency SMS process (for setup or actual emergency).
          * @param {boolean} isInitialSetup True if this is the first time setting the number.
          */
-        function startEmergencySMSProcess(isInitialSetup = false) {
+        async function startEmergencySMSProcess(isInitialSetup = false) { // Made async for speak()
             if (!SpeechRecognition) {
                 speak("Voice commands are not supported in this browser. Please use your phone's messaging app manually.", 'emergency');
                 return;
@@ -461,8 +461,9 @@
             // NEW: Stop continuous recognition temporarily AND clear the periodic full info interval
             if (recognition) {
                 recognition.stop();
-                recognition.continuous = false; // Set to false for single-phrase listening in emergency flow
             }
+            recognition.continuous = false; // Set to false for single-phrase listening in emergency flow
+
             clearInterval(fullInfoIntervalId); 
             console.log("[SR Debug] Full info speaking paused.");
 
@@ -470,21 +471,24 @@
             emergencyCallState = 'LISTENING_FOR_DIGITS'; // Set state to listen for digits
 
             if (isInitialSetup) {
-                speak("Welcome to SafeVision. First, please speak the 10-digit emergency contact number, digit by digit. This number will be saved.", 'emergency');
+                await speak("Welcome to SafeVision. First, please speak the 10-digit emergency contact number, digit by digit. This number will be saved.", 'emergency');
             } else {
-                speak("Please speak the 10-digit phone number, digit by digit.", 'emergency');
+                await speak("Please speak the 10-digit phone number, digit by digit.", 'emergency');
             }
             
-            speechRecognitionStatusEl.innerHTML = '<i class="fas fa-microphone"></i> Listening for number...';
-            
-            recognition.start(); // Start speech recognition for number input
-            clearTimeout(emergencyTimeoutId); // Clear any previous timeout
-            // Set a timeout for the user's initial response
-            emergencyTimeoutId = setTimeout(() => {
-                handleEmergencyTimeout();
-            }, EMERGENCY_TIMEOUT_MS);
+            // Delay starting recognition until speech is done
+            setTimeout(() => {
+                speechRecognitionStatusEl.innerHTML = '<i class="fas fa-microphone"></i> Listening for number...';
+                recognition.start(); // Start speech recognition for number input
+                clearTimeout(emergencyTimeoutId); // Clear any previous timeout
+                // Set a timeout for the user's initial response
+                emergencyTimeoutId = setTimeout(() => {
+                    handleEmergencyTimeout();
+                }, EMERGENCY_TIMEOUT_MS);
+                console.log("[SR Debug] Recognition started for digits after speech.");
+            }, 500); // Small delay to let speech finish
 
-            console.log("[SR Debug] Started listening for digits.");
+            console.log("[SR Debug] Initializing listening for digits.");
         }
 
         /**
@@ -522,7 +526,7 @@
         function setupSpeechRecognition() {
             if (!SpeechRecognition) {
                 console.warn("Web Speech API (SpeechRecognition) not supported in this browser.");
-                speechRecognitionStatusEl.innerHTML = " Voice commands not supported.";
+                speechRecognitionStatusEl.innerHTML = "❌ Voice commands not supported.";
                 speechRecognitionStatusEl.style.color = 'red';
                 return;
             }
@@ -577,6 +581,8 @@
                                 if (storedNumber && storedNumber.length === 10) {
                                     speak(`Sending emergency SMS to ${storedNumber}.`, 'emergency');
                                     // Add a slight delay to allow speech to finish before opening SMS app
+                                    // Also stop recognition before opening external app
+                                    if(recognition) recognition.stop(); // Stop continuous recognition before opening external app
                                     setTimeout(() => initiateSMS(storedNumber), 2000); // 2-second delay
                                 } else {
                                     speak("Emergency contact number is not set. Please say, change emergency number, to set it.", 'emergency');
@@ -666,16 +672,16 @@
                        console.log("[SR Debug] No speech detected (continuous mode).");
                    } else if (event.error === 'not-allowed') {
                        speak("Microphone permission denied. Voice commands are disabled.", 'emergency');
-                       speechRecognitionStatusEl.innerHTML = " Mic permission denied!";
+                       speechRecognitionStatusEl.innerHTML = "❌ Mic permission denied!";
                        speechRecognitionStatusEl.style.color = 'red';
                        recognition.continuous = false; // Stop trying to restart if permission denied
                    } else if (event.error === 'network') {
                        speak("Voice commands require an internet connection.", 'emergency');
-                       speechRecognitionStatusEl.innerHTML = " No internet for voice!";
+                       speechRecognitionStatusEl.innerHTML = "🌐 No internet for voice!";
                        speechRecognitionStatusEl.style.color = 'orange';
                    } else {
                        speak("A voice command error occurred. Trying to restart.", 'emergency');
-                       speechRecognitionStatusEl.innerHTML = ` Voice error: ${event.error}`;
+                       speechRecognitionStatusEl.innerHTML = `⚠️ Voice error: ${event.error}`;
                        speechRecognitionStatusEl.style.color = 'orange';
                    }
                 } else { // If in an active emergency flow
@@ -724,7 +730,7 @@
                     if (e.message.includes("already started")) {
                         // Ignore if already started
                     } else if (e.message.includes("permission")) {
-                         speechRecognitionStatusEl.innerHTML = " Mic permission needed!";
+                         speechRecognitionStatusEl.innerHTML = "❌ Mic permission needed!";
                          speechRecognitionStatusEl.style.color = 'red';
                     }
                 }
@@ -761,7 +767,7 @@
 
         // --- Initial App Load Function ---
         async function main() {
-            statusEl.textContent = " Loading AI model...";
+            statusEl.textContent = "🔄 Loading AI model...";
             // Delay to allow browser to prepare SpeechSynthesis voices and potentially satisfy autoplay policy
             await new Promise(resolve => setTimeout(resolve, 500));
 
@@ -780,7 +786,7 @@
 
             // Load the COCO-SSD AI model (lite_mobilenet_v2 for performance)
             model = await cocoSsd.load({base: 'lite_mobilenet_v2'});
-            statusEl.textContent = " AI model loaded!";
+            statusEl.textContent = "✅ AI model loaded!";
 
             setupSpeechRecognition(); // Initialize speech recognition object
 
@@ -788,7 +794,7 @@
             const storedEmergencyNumber = loadEmergencyContact();
             if (!storedEmergencyNumber || storedEmergencyNumber.length !== 10) {
                 // If no valid number stored, prompt for it
-                speak("Welcome to SafeVision. First, please speak the 10-digit emergency contact number, digit by digit. This number will be saved.", 'emergency');
+                getUserLocation(); // Get location for potential first SMS
                 startEmergencySMSProcess(true); // True for initial setup
             } else {
                 // Number already set, proceed with continuous listening
