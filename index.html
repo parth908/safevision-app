@@ -9,7 +9,7 @@
     <meta name="theme-color" content="#000000">
     <link rel="apple-touch-icon" href="icon-192.png">
 
-    <!-- Font Awesome for Icons (Mute/Unmute, Phone/SMS) -->
+    <!-- Font Awesome for Icons (Microphone for listening status) -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
 
     <style>
@@ -45,56 +45,13 @@
             background-color: rgba(0, 0, 0, 0.7); /* Semi-transparent black background */
             padding: 10px;
             border-radius: 8px;
-            z-index: 2; /* Above video/canvas, below buttons */
+            z-index: 2; /* Above video/canvas */
             font-size: 0.9em; /* Slightly smaller font for info block */
         }
         /* Styling for warning text (e.g., "Person is very close") */
         .warning-text {
             color: red;
             font-weight: bold;
-        }
-        /* Container for control buttons (Mute/Unmute, Emergency) */
-        .control-buttons {
-            position: absolute;
-            bottom: 20px;
-            right: 20px; /* Positioned to the right for easy access */
-            z-index: 3; /* On top of all other elements */
-            display: flex;
-            flex-direction: column; /* Stack buttons vertically */
-            gap: 10px; /* Space between buttons */
-        }
-        /* Styling for individual control buttons */
-        .control-button {
-            background-color: rgba(0, 123, 255, 0.8); /* Blue, slightly transparent */
-            border: none;
-            border-radius: 50%; /* Make them round */
-            color: white;
-            width: 60px; /* Size of the button */
-            height: 60px;
-            font-size: 24px; /* Icon size */
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            cursor: pointer;
-            box-shadow: 0px 4px 8px rgba(0, 0, 0, 0.3); /* Subtle shadow for depth */
-            transition: background-color 0.3s ease; /* Smooth hover effect */
-        }
-        .control-button:hover {
-            background-color: rgba(0, 123, 255, 1); /* Opaque blue on hover */
-        }
-        /* Specific styling for the emergency button (red) */
-        .control-button.emergency-button {
-            background-color: rgba(220, 53, 69, 0.8); /* Red, slightly transparent */
-        }
-        .control-button.emergency-button:hover {
-            background-color: rgba(220, 53, 69, 1); /* Opaque red on hover */
-        }
-        /* Styling for the mute button when activated (grey) */
-        .control-button.muted {
-            background-color: rgba(108, 117, 125, 0.8); /* Grey when muted */
-        }
-        .control-button.muted:hover {
-            background-color: rgba(108, 117, 125, 1); /* Opaque grey on hover */
         }
         /* Status display for speech recognition (e.g., "Listening...") */
         #speechRecognitionStatus {
@@ -106,8 +63,19 @@
             border-radius: 8px;
             color: yellow; /* Yellow text for "listening" status */
             font-size: 0.9em;
-            display: none; /* Hidden by default until recognition starts */
+            display: flex; /* Always display for continuous listening indicator */
+            align-items: center;
+            gap: 5px;
             z-index: 3;
+        }
+        #speechRecognitionStatus .fas {
+            animation: pulse 1.5s infinite; /* Simple pulsing animation for mic */
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.1); opacity: 0.8; }
+            100% { transform: scale(1); opacity: 1; }
         }
     </style>
 </head>
@@ -115,26 +83,16 @@
     <video id="video" autoplay playsinline muted></video>
     <canvas id="canvas"></canvas>
     <div id="info">
-        <div id="status">🔄 Loading AI model...</div>
-        <div id="weather">🌡️ Temp: 35°C | 🌬️ Wind: 15 km/h | Sunny</div> <!-- Static weather display -->
+        <div id="status"> Loading AI model...</div>
+        <div id="weather">Temp: 35°C | Wind: 15 km/h | Sunny</div> <!-- Static weather display -->
         <div id="datetime"></div>
-        <div id="object">👁️ Waiting for detection...</div>
-        <div id="proximityStatus" style="color: limegreen;">🟢 No person detected</div>
+        <div id="object"> Waiting for detection...</div>
+        <div id="proximityStatus" style="color: limegreen;">No person detected</div>
     </div>
 
-    <!-- Control Buttons -->
-    <div class="control-buttons">
-        <button id="emergencyCallButton" class="control-button emergency-button" title="Emergency SMS">
-            <i class="fas fa-sms"></i> <!-- SMS icon for emergency feature -->
-        </button>
-        <button id="muteToggleButton" class="control-button" title="Toggle Mute">
-            <i class="fas fa-volume-up"></i> <!-- Speaker icon for mute/unmute -->
-        </button>
-    </div>
-
-    <!-- Speech Recognition Status Display -->
+    <!-- Speech Recognition Status Display - Always visible for continuous listening -->
     <div id="speechRecognitionStatus">
-        <i class="fas fa-microphone"></i> Listening...
+        <i class="fas fa-microphone"></i> Listening for commands...
     </div>
 
     <!-- TensorFlow.js and COCO-SSD Model Libraries from CDN -->
@@ -151,8 +109,6 @@
         const datetimeEl = document.getElementById("datetime");
         const objectEl = document.getElementById("object");
         const proximityStatusEl = document.getElementById("proximityStatus");
-        const muteToggleButton = document.getElementById("muteToggleButton");
-        const emergencyCallButton = document.getElementById("emergencyCallButton");
         const speechRecognitionStatusEl = document.getElementById("speechRecognitionStatus");
 
         // --- Global Variables for AI Model and Speech ---
@@ -166,6 +122,7 @@
         const SPEECH_COOLDOWN_WARNING = 3000; // 3 seconds cooldown for proximity warnings
         let lastFullInfoSpeechTime = 0; // Timestamp of last full info speech
         let lastWarningSpeechTime = 0; // Timestamp of last warning speech
+        let fullInfoIntervalId; // Store ID for periodic full info speaking interval
 
         // --- Performance Optimization Variables ---
         let frameCount = 0;
@@ -177,10 +134,9 @@
         const PROXIMITY_THRESHOLD_HEIGHT = 450;
 
         // --- Web Speech Recognition API Setup ---
-        // Provides voice-to-text functionality for emergency commands
+        // Provides voice-to-text functionality for commands and emergency flow
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
         let recognition; // Instance of SpeechRecognition
-        let emergencySpeechRecognitionActive = false; // Flag to manage recognition state
         let emergencyCallState = 'IDLE'; // State machine for emergency SMS process
         // States: 'IDLE', 'PROMPT_NUMBER_START', 'LISTENING_FOR_DIGITS', 'NUMBER_COLLECTED_CONFIRMATION', 'LISTENING_FOR_CONFIRMATION'
         let currentEmergencyNumber = ''; // Stores digits spoken by user for emergency SMS
@@ -252,7 +208,7 @@
             const voices = speechSynthesis.getVoices();
             if (voices.length === 0) {
                 console.warn("[TTS Debug] No speech synthesis voices available on this device.");
-                statusEl.textContent = "❌ Speech not available (no voices)";
+                statusEl.textContent = " Speech not available (no voices)";
                 statusEl.style.color = 'red';
                 return;
             } else {
@@ -298,27 +254,12 @@
             speechSynthesis.speak(utterance);
         }
 
-        // --- Mute/Unmute Toggle Button Functionality ---
-        muteToggleButton.addEventListener('click', () => {
-            isMuted = !isMuted; // Toggle mute state
-            if (isMuted) {
-                muteToggleButton.innerHTML = '<i class="fas fa-volume-mute"></i>'; // Change icon to mute
-                muteToggleButton.classList.add('muted'); // Add muted style class
-                speak("Muted", 'emergency'); // Speak "Muted" (bypasses global mute)
-            } else {
-                muteToggleButton.innerHTML = '<i class="fas fa-volume-up"></i>'; // Change icon to unmute
-                muteToggleButton.classList.remove('muted'); // Remove muted style class
-                speak("Unmuted", 'emergency'); // Speak "Unmuted"
-            }
-            console.log(`Speech is now ${isMuted ? 'muted' : 'unmuted'}.`);
-        });
-
         // --- Date and Time Update ---
         function updateDateTime() {
             const now = new Date();
             const date = now.toDateString();
             const time = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-            datetimeEl.textContent = `📅 ${date} | ⏰ ${time}`;
+            datetimeEl.textContent = ` ${date} |  ${time}`;
         }
         setInterval(updateDateTime, 1000); // Update every second
         updateDateTime(); // Initial call to display immediately
@@ -378,7 +319,7 @@
             if (frameCount % (FRAMES_TO_SKIP + 1) !== 0) {
                 requestAnimationFrame(detectFrame); // Skip this frame and request the next
                 return;
-            }
+                }
 
             let predictions;
             try {
@@ -495,19 +436,23 @@
                 speak("Voice command for emergency is not supported in this browser. Please use your phone's messaging app manually.", 'emergency');
                 return;
             }
-            if (emergencySpeechRecognitionActive) {
-                speak("Emergency process already active.", 'emergency');
-                return;
+            
+            // NEW: Stop continuous recognition temporarily
+            if (recognition) {
+                recognition.stop();
+                recognition.continuous = false; // Set to false for single-phrase listening in emergency flow
             }
+
+            // NEW: Clear the periodic full info interval
+            clearInterval(fullInfoIntervalId); 
+            console.log("[SR Debug] Full info speaking paused.");
 
             speak("Please speak the 10-digit phone number, digit by digit.", 'emergency');
             currentEmergencyNumber = ''; // Reset the number
             emergencyCallState = 'LISTENING_FOR_DIGITS'; // Set state to listen for digits
-            emergencySpeechRecognitionActive = true; // Activate recognition flag
             speechRecognitionStatusEl.innerHTML = '<i class="fas fa-microphone"></i> Listening for number...';
-            speechRecognitionStatusEl.style.display = 'block'; // Show listening status
-
-            recognition.start(); // Start speech recognition
+            
+            recognition.start(); // Start speech recognition for number input
             clearTimeout(emergencyTimeoutId); // Clear any previous timeout
             // Set a timeout for the user's initial response
             emergencyTimeoutId = setTimeout(() => {
@@ -525,6 +470,8 @@
             speak("No response. Emergency SMS process cancelled.", 'emergency');
             resetEmergencyState(); // Reset emergency state
             console.log("[SR Debug] Emergency process timed out.");
+            // NEW: Restart continuous listening after emergency flow is done/timed out
+            startContinuousRecognition(); 
         }
 
         /**
@@ -533,97 +480,137 @@
         function resetEmergencyState() {
             emergencyCallState = 'IDLE';
             currentEmergencyNumber = '';
-            emergencySpeechRecognitionActive = false;
-            speechRecognitionStatusEl.style.display = 'none'; // Hide listening status
+            speechRecognitionStatusEl.innerHTML = '<i class="fas fa-microphone"></i> Listening for commands...'; // Revert status
             clearTimeout(emergencyTimeoutId); // Clear any pending timeout
-            if (recognition) {
-                recognition.stop(); // Ensure recognition is stopped if active
-            }
+            // Don't stop recognition here, let continuous mode handle it
             console.log("[SR Debug] Emergency state reset to IDLE.");
+            // NEW: Resume the periodic full info interval
+            fullInfoIntervalId = setInterval(speakFullInformation, SPEECH_COOLDOWN_FULL_INFO);
+            console.log("[SR Debug] Full info speaking resumed.");
         }
 
         /**
-         * Sets up the Web Speech Recognition API specifically for the emergency flow.
+         * Sets up the Web Speech Recognition API for continuous listening or emergency flow.
          */
-        function setupSpeechRecognitionForEmergency() {
-            if (!SpeechRecognition) return; // Exit if API not supported
+        function setupSpeechRecognition() {
+            if (!SpeechRecognition) {
+                console.warn("Web Speech API (SpeechRecognition) not supported in this browser.");
+                speechRecognitionStatusEl.innerHTML = "❌ Voice commands not supported.";
+                speechRecognitionStatusEl.style.color = 'red';
+                return;
+            }
 
             recognition = new SpeechRecognition();
-            recognition.continuous = false; // Listen for one phrase at a time
-            recognition.interimResults = false; // Don't return interim (partial) results
+            recognition.continuous = true; // Listen continuously for general commands
+            recognition.interimResults = true; // Get partial results for smoother experience
             recognition.lang = 'en-IN'; // Set recognition language to Indian English
 
             // Event handler when speech recognition starts
             recognition.onstart = () => {
-                speechRecognitionStatusEl.style.display = 'block'; // Show listening status
-                console.log("[SR Debug] Recognition started for emergency flow. State:", emergencyCallState);
-                clearTimeout(emergencyTimeoutId); // Clear any old timeout on start
+                console.log("[SR Debug] Recognition started. Continuous mode:", recognition.continuous);
             };
 
             // Event handler for speech recognition results
             recognition.onresult = (event) => {
-                const transcript = event.results[0][0].transcript.toLowerCase(); // Get recognized text
-                console.log("[SR Debug] Recognized:", transcript, "State:", emergencyCallState);
-                clearTimeout(emergencyTimeoutId); // Clear timeout as user responded
+                const results = event.results;
+                for (let i = event.resultIndex; i < results.length; i++) {
+                    const transcript = results[i][0].transcript.toLowerCase().trim();
+                    const isFinal = results[i].isFinal;
 
-                if (emergencyCallState === 'LISTENING_FOR_DIGITS') {
-                    // Normalize transcript to find digits more robustly (e.g., "one" to "1")
-                    const normalizedTranscript = transcript
-                        .replace(/zero/g, '0').replace(/one/g, '1').replace(/two/g, '2').replace(/three/g, '3')
-                        .replace(/four/g, '4').replace(/five/g, '5').replace(/six/g, '6').replace(/seven/g, '7')
-                        .replace(/eight/g, '8').replace(/nine/g, '9');
-                    
-                    const digits = normalizedTranscript.match(/\d/g); // Extract all digits from the transcript
-
-                    if (digits) {
-                        currentEmergencyNumber += digits.join(''); // Append recognized digits
-                        console.log("[SR Debug] Current number:", currentEmergencyNumber);
-
-                        if (currentEmergencyNumber.length < 10) {
-                            // If less than 10 digits, prompt for more
-                            speak(`You said ${transcript}. Current number is ${currentEmergencyNumber}. Please continue.`, 'emergency');
-                            speechRecognitionStatusEl.innerHTML = `Number: ${currentEmergencyNumber} | <i class="fas fa-microphone"></i> Listening...`;
-                            recognition.start(); // Restart listening for more digits
-                            emergencyTimeoutId = setTimeout(handleEmergencyTimeout, EMERGENCY_TIMEOUT_MS);
-                        } else {
-                            // If 10 or more digits, trim to 10 and ask for confirmation
-                            currentEmergencyNumber = currentEmergencyNumber.substring(0, 10);
-                            speak(`You said ${currentEmergencyNumber}. Is this correct? Say send to confirm, or correct to re-enter.`, 'emergency');
-                            emergencyCallState = 'NUMBER_COLLECTED_CONFIRMATION'; // Change state
-                            speechRecognitionStatusEl.innerHTML = `Confirm: ${currentEmergencyNumber} | <i class="fas fa-microphone"></i> Listening...`;
-                            recognition.start(); // Listen for confirmation
-                            emergencyTimeoutId = setTimeout(handleEmergencyTimeout, EMERGENCY_TIMEOUT_MS);
-                        }
-                    } else if (transcript.includes("cancel")) {
-                        // Allow user to cancel at this stage
-                        speak("Emergency SMS process cancelled.", 'emergency');
-                        resetEmergencyState();
-                    } else {
-                        // If no digits recognized, reprompt
-                        speak("I didn't hear any digits. Please speak the 10-digit phone number, digit by digit.", 'emergency');
-                        speechRecognitionStatusEl.innerHTML = '<i class="fas fa-microphone"></i> Listening for number...';
-                        recognition.start(); // Restart listening for digits
-                        emergencyTimeoutId = setTimeout(handleEmergencyTimeout, EMERGENCY_TIMEOUT_MS);
+                    // Display interim results during number dictation
+                    if (!isFinal && (emergencyCallState === 'LISTENING_FOR_DIGITS' || emergencyCallState === 'NUMBER_COLLECTED_CONFIRMATION')) {
+                        speechRecognitionStatusEl.innerHTML = `<i class="fas fa-microphone"></i> ${currentEmergencyNumber}${transcript}...`;
+                        continue; // Process next result if not final
                     }
-                } else if (emergencyCallState === 'NUMBER_COLLECTED_CONFIRMATION') {
-                    // Handle user's confirmation
-                    if (transcript.includes("send") || transcript.includes("yes")) {
-                        initiateSMS(currentEmergencyNumber); // Initiate SMS if confirmed
-                        resetEmergencyState(); // Reset state
-                    } else if (transcript.includes("correct") || transcript.includes("no") || transcript.includes("clear")) {
-                        // Allow user to correct/re-enter number
-                        speak("Okay, please re-enter the 10-digit number, digit by digit.", 'emergency');
-                        currentEmergencyNumber = ''; // Reset number
-                        emergencyCallState = 'LISTENING_FOR_DIGITS'; // Go back to listening for digits
-                        speechRecognitionStatusEl.innerHTML = '<i class="fas fa-microphone"></i> Listening for number...';
-                        recognition.start(); // Restart listening
-                        emergencyTimeoutId = setTimeout(handleEmergencyTimeout, EMERGENCY_TIMEOUT_MS);
-                    } else {
-                        // If confirmation not understood, reprompt
-                        speak(`I did not understand your confirmation. Say send or correct.`, 'emergency');
-                        speechRecognitionStatusEl.innerHTML = `Confirm: ${currentEmergencyNumber} | <i class="fas fa-microphone"></i> Listening...`;
-                        recognition.start(); // Restart listening for confirmation
-                        emergencyTimeoutId = setTimeout(handleEmergencyTimeout, EMERGENCY_TIMEOUT_MS);
+
+
+                    if (isFinal) {
+                        console.log("[SR Debug] Final recognized:", transcript, "State:", emergencyCallState);
+
+                        // --- Mute/Unmute Commands (Always active if in IDLE state) ---
+                        if (emergencyCallState === 'IDLE') {
+                            if (transcript.includes("mute")) {
+                                isMuted = true;
+                                speak("Muted.", 'emergency');
+                                console.log("App muted by voice command.");
+                                speechRecognitionStatusEl.innerHTML = `<i class="fas fa-microphone"></i> Muted | Listening...`;
+                                continue;
+                            }
+                            if (transcript.includes("unmute")) {
+                                isMuted = false;
+                                speak("Unmuted.", 'emergency');
+                                console.log("App unmuted by voice command.");
+                                speechRecognitionStatusEl.innerHTML = `<i class="fas fa-microphone"></i> Listening for commands...`;
+                                continue;
+                            }
+                            // --- Emergency Command (Always active if in IDLE state) ---
+                            if (transcript.includes("emergency")) {
+                                getUserLocation(); // Get location for SMS
+                                startEmergencySMSProcess();
+                                // Do not `break` or `return` here, let the onend handler restart continuous listening
+                                return; // Exit onresult, new flow starts
+                            }
+                        }
+
+                        // --- Emergency SMS Flow Commands (Active only when not IDLE) ---
+                        if (emergencyCallState === 'LISTENING_FOR_DIGITS') {
+                            // Normalize transcript to find digits more robustly (e.g., "one" to "1")
+                            const normalizedTranscript = transcript
+                                .replace(/zero/g, '0').replace(/one/g, '1').replace(/two/g, '2').replace(/three/g, '3')
+                                .replace(/four/g, '4').replace(/five/g, '5').replace(/six/g, '6').replace(/seven/g, '7')
+                                .replace(/eight/g, '8').replace(/nine/g, '9');
+                            
+                            const digits = normalizedTranscript.match(/\d/g); // Extract all digits from the transcript
+
+                            if (digits) {
+                                currentEmergencyNumber += digits.join('');
+                                console.log("[SR Debug] Current number so far:", currentEmergencyNumber);
+
+                                if (currentEmergencyNumber.length < 10) {
+                                    speak(`You said ${transcript}. Current number is ${currentEmergencyNumber}. Please continue.`, 'emergency');
+                                    speechRecognitionStatusEl.innerHTML = `Number: ${currentEmergencyNumber} | <i class="fas fa-microphone"></i> Listening...`;
+                                    recognition.start(); // Restart listening for more digits
+                                    clearTimeout(emergencyTimeoutId);
+                                    emergencyTimeoutId = setTimeout(handleEmergencyTimeout, EMERGENCY_TIMEOUT_MS);
+                                } else {
+                                    currentEmergencyNumber = currentEmergencyNumber.substring(0, 10);
+                                    speak(`You said ${currentEmergencyNumber}. Is this correct? Say send to confirm, or correct to re-enter.`, 'emergency');
+                                    emergencyCallState = 'NUMBER_COLLECTED_CONFIRMATION';
+                                    speechRecognitionStatusEl.innerHTML = `Confirm: ${currentEmergencyNumber} | <i class="fas fa-microphone"></i> Listening...`;
+                                    recognition.start(); // Listen for confirmation
+                                    clearTimeout(emergencyTimeoutId);
+                                    emergencyTimeoutId = setTimeout(handleEmergencyTimeout, EMERGENCY_TIMEOUT_MS);
+                                }
+                            } else if (transcript.includes("cancel")) {
+                                speak("Emergency SMS process cancelled.", 'emergency');
+                                resetEmergencyState();
+                            } else {
+                                speak("I didn't hear any digits. Please speak the 10-digit phone number, digit by digit.", 'emergency');
+                                speechRecognitionStatusEl.innerHTML = '<i class="fas fa-microphone"></i> Listening for number...';
+                                recognition.start();
+                                clearTimeout(emergencyTimeoutId);
+                                emergencyTimeoutId = setTimeout(handleEmergencyTimeout, EMERGENCY_TIMEOUT_MS);
+                            }
+                        } else if (emergencyCallState === 'NUMBER_COLLECTED_CONFIRMATION') {
+                            if (transcript.includes("send") || transcript.includes("yes")) {
+                                initiateSMS(currentEmergencyNumber);
+                                resetEmergencyState();
+                            } else if (transcript.includes("correct") || transcript.includes("no") || transcript.includes("clear")) {
+                                speak("Okay, please re-enter the 10-digit number, digit by digit.", 'emergency');
+                                currentEmergencyNumber = '';
+                                emergencyCallState = 'LISTENING_FOR_DIGITS';
+                                speechRecognitionStatusEl.innerHTML = '<i class="fas fa-microphone"></i> Listening for number...';
+                                recognition.start();
+                                clearTimeout(emergencyTimeoutId);
+                                emergencyTimeoutId = setTimeout(handleEmergencyTimeout, EMERGENCY_TIMEOUT_MS);
+                            } else {
+                                speak(`I did not understand your confirmation. Say send or correct.`, 'emergency');
+                                speechRecognitionStatusEl.innerHTML = `Confirm: ${currentEmergencyNumber} | <i class="fas fa-microphone"></i> Listening...`;
+                                recognition.start();
+                                clearTimeout(emergencyTimeoutId);
+                                emergencyTimeoutId = setTimeout(handleEmergencyTimeout, EMERGENCY_TIMEOUT_MS);
+                            }
+                        }
                     }
                 }
             };
@@ -631,30 +618,79 @@
             // Event handler for speech recognition errors
             recognition.onerror = (event) => {
                 console.error("[SR Debug] Speech recognition error:", event.error, event.message);
-                speechRecognitionStatusEl.style.display = 'none'; // Hide listening status on error
-                if (event.error === 'no-speech') {
-                    // 'no-speech' indicates silence, handled by explicit timeout.
-                } else if (event.error === 'not-allowed') {
-                    speak("Microphone permission denied. Cannot use voice commands for emergency.", 'emergency');
-                } else if (event.error === 'network') {
-                    speak("Speech recognition requires an internet connection.", 'emergency');
-                } else {
-                    speak("A speech recognition error occurred. Please try again.", 'emergency');
+                
+                if (emergencyCallState === 'IDLE') {
+                   if (event.error === 'no-speech') {
+                       console.log("[SR Debug] No speech detected (continuous mode).");
+                   } else if (event.error === 'not-allowed') {
+                       speak("Microphone permission denied. Voice commands are disabled.", 'emergency');
+                       speechRecognitionStatusEl.innerHTML = "❌ Mic permission denied!";
+                       speechRecognitionStatusEl.style.color = 'red';
+                       recognition.continuous = false; // Stop trying to restart if permission denied
+                   } else if (event.error === 'network') {
+                       speak("Voice commands require an internet connection.", 'emergency');
+                       speechRecognitionStatusEl.innerHTML = "🌐 No internet for voice!";
+                       speechRecognitionStatusEl.style.color = 'orange';
+                   } else {
+                       speak("A voice command error occurred. Trying to restart.", 'emergency');
+                       speechRecognitionStatusEl.innerHTML = `⚠️ Voice error: ${event.error}`;
+                       speechRecognitionStatusEl.style.color = 'orange';
+                   }
+                } else { // If in an active emergency flow
+                    speak("An error occurred during emergency voice command. Please try again.", 'emergency');
+                    resetEmergencyState(); // Reset emergency flow
                 }
-                resetEmergencyState(); // Reset state on most errors
+
+                // Attempt to restart continuous recognition if it was supposed to be running
+                if (emergencyCallState === 'IDLE' && recognition.continuous && event.error !== 'not-allowed') {
+                    console.log("[SR Debug] Attempting to restart continuous recognition after error.");
+                    try {
+                         recognition.start();
+                    } catch (e) {
+                         console.error("[SR Debug] Failed to restart recognition:", e);
+                    }
+                }
             };
 
             // Event handler when speech recognition ends
             recognition.onend = () => {
-                // Only hide status if not actively waiting for a response in the emergency flow
-                if (emergencyCallState === 'IDLE' || emergencyCallState === 'NUMBER_COLLECTED_CONFIRMATION') {
-                     // Keep listening if awaiting confirmation (recognition.start() will be called again)
-                } else {
-                    speechRecognitionStatusEl.style.display = 'none';
+                if (emergencyCallState === 'IDLE' && recognition.continuous) {
+                    console.log("[SR Debug] Continuous recognition ended, restarting...");
+                    try {
+                        recognition.start(); // Automatically restart to maintain continuous listening
+                    } catch (e) {
+                        console.warn("[SR Debug] Failed to restart continuous recognition:", e);
+                    }
+                } else if (emergencyCallState !== 'IDLE' && !recognition.continuous) {
+                    // For single-phrase modes within emergency flow, only restart if logic explicitly calls it
+                    console.log("[SR Debug] Emergency flow single-phrase recognition ended. Will restart if needed.");
                 }
-                console.log("[SR Debug] Recognition session ended. State:", emergencyCallState);
             };
         }
+
+        // Helper function to start continuous recognition (used after emergency flow ends)
+        function startContinuousRecognition() {
+            if (recognition && emergencyCallState === 'IDLE') {
+                try {
+                    recognition.continuous = true;
+                    recognition.interimResults = true;
+                    recognition.start();
+                    console.log("[SR Debug] Continuous recognition started.");
+                    speechRecognitionStatusEl.innerHTML = '<i class="fas fa-microphone"></i> Listening for commands...';
+                } catch (e) {
+                    console.warn("[SR Debug] Recognition start failed (likely already running or permission issue):", e);
+                    if (e.message.includes("already started")) {
+                        // Ignore if already started
+                    } else if (e.message.includes("permission")) {
+                         speechRecognitionStatusEl.innerHTML = "❌ Mic permission needed!";
+                         speechRecognitionStatusEl.style.color = 'red';
+                    }
+                }
+            } else {
+                 console.log("[SR Debug] Cannot start continuous recognition. Recognition object not ready or not IDLE state.");
+            }
+        }
+
 
         /**
          * Opens the device's default messaging app with a pre-filled SMS.
@@ -675,14 +711,10 @@
             // Inform the user about the manual sending step
             speak("Opening your messaging app to send the SMS. Please review the message and tap send.", 'emergency');
             console.log("[SMS Debug] SMS URL generated:", smsUrl);
-        }
 
-        // --- Emergency Button Event Listener ---
-        emergencyCallButton.addEventListener('click', () => {
-            // Attempt to get location before starting the SMS process
-            getUserLocation();
-            startEmergencySMSProcess(); // Start the voice-guided SMS flow
-        });
+            // After initiating SMS, restart continuous listening after a short delay
+            setTimeout(startContinuousRecognition, 5000); // Give time for messaging app to open/user to react
+        }
 
 
         // --- Initial App Load Function ---
@@ -708,11 +740,12 @@
             model = await cocoSsd.load({base: 'lite_mobilenet_v2'});
             statusEl.textContent = "✅ AI model loaded!";
 
-            setupSpeechRecognitionForEmergency(); // Initialize speech recognition for emergency commands
+            setupSpeechRecognition(); // Initialize speech recognition object
+            startContinuousRecognition(); // Explicitly start continuous listening for commands
 
             // Initial full information speech and set up periodic intervals
             speakFullInformation();
-            setInterval(speakFullInformation, SPEECH_COOLDOWN_FULL_INFO);
+            fullInfoIntervalId = setInterval(speakFullInformation, SPEECH_COOLDOWN_FULL_INFO); // Store interval ID
 
             detectFrame(); // Start the continuous object detection loop
         }
