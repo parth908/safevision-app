@@ -1,860 +1,167 @@
+<!-- ✅ index.html -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8" />
-    <title>SafeVision</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-    <!-- Manifest for PWA features -->
-    <link rel="manifest" href="manifest.json">
-    <meta name="theme-color" content="#000000">
-    <link rel="apple-touch-icon" href="icon-192.png">
-
-    <!-- Font Awesome for Icons (Microphone for listening status) -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
-
-    <style>
-        /* Base styles for the body to cover the entire viewport */
-        body {
-            margin: 0;
-            font-family: sans-serif;
-            background-color: #000;
-            color: #fff;
-            overflow: hidden; /* Prevent scrolling */
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh; /* Full viewport height */
-            width: 100vw;  /* Full viewport width */
-        }
-        /* Video and Canvas elements to cover the entire screen */
-        video, canvas {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100vw;
-            height: 100vh;
-            object-fit: cover; /* Ensures video fills screen, may crop if aspect ratios differ */
-            z-index: 0; /* Behind other UI elements */
-        }
-        /* Information overlay for status, weather, datetime, object detection */
-        #info {
-            position: absolute;
-            top: 10px;
-            left: 10px;
-            text-align: left;
-            background-color: rgba(0, 0, 0, 0.7); /* Semi-transparent black background */
-            padding: 10px;
-            border-radius: 8px;
-            z-index: 2; /* Above video/canvas */
-            font-size: 0.9em; /* Slightly smaller font for info block */
-        }
-        /* Styling for warning text (e.g., "Person is very close") */
-        .warning-text {
-            color: red;
-            font-weight: bold;
-        }
-        /* Status display for speech recognition (e.g., "Listening...") */
-        #speechRecognitionStatus {
-            position: absolute;
-            top: 10px;
-            right: 10px;
-            background-color: rgba(0, 0, 0, 0.7);
-            padding: 8px 12px;
-            border-radius: 8px;
-            color: yellow; /* Yellow text for "listening" status */
-            font-size: 0.9em;
-            display: flex; /* Always display for continuous listening indicator */
-            align-items: center;
-            gap: 5px;
-            z-index: 3;
-        }
-        #speechRecognitionStatus .fas {
-            animation: pulse 1.5s infinite; /* Simple pulsing animation for mic */
-        }
-
-        @keyframes pulse {
-            0% { transform: scale(1); opacity: 1; }
-            50% { transform: scale(1.1); opacity: 0.8; }
-            100% { transform: scale(1); opacity: 1; }
-        }
-    </style>
+  <meta charset="UTF-8" />
+  <title>SafeVision</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <link rel="manifest" href="manifest.json" />
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('./service-worker.js')
+          .then(() => console.log('Service Worker registered'))
+          .catch(err => console.error('Service Worker error:', err));
+      });
+    }
+  </script>
+  <style>
+    body {
+      margin: 0;
+      font-family: sans-serif;
+      background-color: #000;
+      color: #fff;
+      overflow: hidden;
+    }
+    video, canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      object-fit: cover;
+      z-index: 0;
+    }
+    #info {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      text-align: left;
+      background-color: rgba(0, 0, 0, 0.7);
+      padding: 10px;
+      border-radius: 8px;
+      z-index: 2;
+    }
+  </style>
 </head>
 <body>
-    <video id="video" autoplay playsinline muted></video>
-    <canvas id="canvas"></canvas>
-    <div id="info">
-        <div id="status">🔄 Loading AI model...</div>
-        <div id="weather">🌡️ Temp: 35°C | 🌬️ Wind: 15 km/h | Sunny</div> <!-- Static weather display -->
-        <div id="datetime"></div>
-        <div id="object">👁️ Waiting for detection...</div>
-        <div id="proximityStatus" style="color: limegreen;">🟢 No person detected</div>
-    </div>
+  <video id="video" autoplay playsinline muted></video>
+  <canvas id="canvas"></canvas>
+  <div id="info">
+    <div id="status">🔄 Loading AI model...</div>
+    <div id="weather">🌡️ Temp: 35°C | 🌬️ Wind: 15 km/h</div>
+    <div id="datetime"></div>
+    <div id="object">👁️ Waiting for detection...</div>
+  </div>
 
-    <!-- Speech Recognition Status Display - Always visible for continuous listening -->
-    <div id="speechRecognitionStatus">
-        <i class="fas fa-microphone"></i> Listening for commands...
-    </div>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
 
-    <!-- TensorFlow.js and COCO-SSD Model Libraries from CDN -->
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
+  <script>
+    const video = document.getElementById("video");
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+    const statusEl = document.getElementById("status");
+    const objectEl = document.getElementById("object");
+    const datetimeEl = document.getElementById("datetime");
 
-    <script>
-        // --- DOM Element References ---
-        const video = document.getElementById("video");
-        const canvas = document.getElementById("canvas");
-        const ctx = canvas.getContext("2d");
-        const statusEl = document.getElementById("status");
-        const weatherEl = document.getElementById("weather");
-        const datetimeEl = document.getElementById("datetime");
-        const objectEl = document.getElementById("object");
-        const proximityStatusEl = document.getElementById("proximityStatus");
-        const speechRecognitionStatusEl = document.getElementById("speechRecognitionStatus");
+    let model, currentEmergencyNumber;
+    let speaking = false, lastSpoken = "";
 
-        // --- Global Variables for AI Model and Speech ---
-        let model;
-        let lastSpokenFullInfo = ""; // Stores last spoken full info text to avoid repetition
-        let speaking = false; // Flag to indicate if speech synthesis is currently active
-        let isMuted = false; // Controls general app speech (emergency warnings bypass this)
+    function speak(text) {
+      if (speaking || !text || text === lastSpoken) return;
+      const utter = new SpeechSynthesisUtterance(text);
+      utter.lang = "en-IN";
+      utter.onend = () => speaking = false;
+      speaking = true;
+      speechSynthesis.cancel();
+      speechSynthesis.speak(utter);
+      lastSpoken = text;
+    }
 
-        // Speech cooldown periods to prevent rapid-fire alerts
-        const SPEECH_COOLDOWN_FULL_INFO = 60000; // NEW: 60 seconds (1 minute) cooldown for periodic info updates
-        const SPEECH_COOLDOWN_WARNING = 3000; // 3 seconds cooldown for proximity warnings
-        let lastFullInfoSpeechTime = 0; // Timestamp of last full info speech
-        let lastWarningSpeechTime = 0; // Timestamp of last warning speech
-        let fullInfoIntervalId; // Store ID for periodic full info speaking interval
+    function updateDateTime() {
+      const now = new Date();
+      datetimeEl.textContent = `${now.toDateString()} | ${now.toLocaleTimeString()}`;
+    }
+    setInterval(updateDateTime, 1000);
 
-        // --- Performance Optimization Variables ---
-        let frameCount = 0;
-        const FRAMES_TO_SKIP = 2; // Process AI detection every 3rd frame (0, 1, 2 -> process 2)
+    function loadEmergencyContact() {
+      return localStorage.getItem("emergencyContact") || null;
+    }
 
-        // --- Proximity Warning Threshold ---
-        // Adjust this value: a larger number means the person needs to be physically closer
-        // for the "VERY CLOSE!" warning to trigger (based on bounding box height).
-        const PROXIMITY_THRESHOLD_HEIGHT = 450;
+    function saveEmergencyContact(number) {
+      localStorage.setItem("emergencyContact", number);
+    }
 
-        // --- Web Speech Recognition API Setup ---
-        // Provides voice-to-text functionality for commands
-        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-        let recognition; // Instance of SpeechRecognition
-        let currentRecognitionState = 'IDLE'; // 'IDLE', 'PROCESSING_GEMINI', 'LISTENING_FOR_DIGITS', 'NUMBER_COLLECTED_CONFIRMATION'
-        let currentEmergencyNumber = ''; // Stores digits spoken by user for emergency SMS
-        const EMERGENCY_TIMEOUT_MS = 10000; // 10 seconds for user to respond during emergency flow
-        let emergencyTimeoutId; // Timeout ID for emergency response waits
-        let userLocation = null; // Stores approximate user location for inclusion in SMS
+    function listenForEmergencyNumber() {
+      const recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
+      recognition.lang = "en-IN";
+      recognition.start();
+      recognition.onresult = async (event) => {
+        let input = event.results[0][0].transcript.toLowerCase().replace(/zero/g, '0').replace(/one/g, '1')
+          .replace(/two/g, '2').replace(/three/g, '3').replace(/four/g, '4')
+          .replace(/five/g, '5').replace(/six/g, '6').replace(/seven/g, '7')
+          .replace(/eight/g, '8').replace(/nine/g, '9').replace(/\D/g, '');
 
-        // --- Emergency Contact Persistence ---
-        const EMERGENCY_CONTACT_KEY = 'safevision_emergency_contact';
-
-        /**
-         * Loads the emergency contact number from localStorage.
-         * @returns {string|null} The stored number or null if not found.
-         */
-        function loadEmergencyContact() {
-            return localStorage.getItem(EMERGENCY_CONTACT_KEY);
+        if (input.length === 10) {
+          currentEmergencyNumber = input;
+          saveEmergencyContact(input);
+          await speak(`Your emergency number is ${input}. You can change it anytime by saying change emergency number.`);
+          mainDetection();
+        } else {
+          speak("Please say a valid 10 digit number.");
+          setTimeout(() => listenForEmergencyNumber(), 3000);
         }
+      };
+    }
 
-        /**
-         * Saves the emergency contact number to localStorage.
-         * @param {string} number The 10-digit number to save.
-         */
-        function saveEmergencyContact(number) {
-            localStorage.setItem(EMERGENCY_CONTACT_KEY, number);
-            console.log("[Emergency Contact] Number saved:", number);
+    async function detectFrame() {
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      const predictions = await model.detect(video);
+
+      predictions.forEach(pred => {
+        const [x, y, width, height] = pred.bbox;
+        ctx.strokeStyle = "#00FF00";
+        ctx.lineWidth = 2;
+        ctx.strokeRect(x, y, width, height);
+        ctx.fillStyle = "#00FF00";
+        ctx.fillText(pred.class, x, y > 10 ? y - 5 : 10);
+
+        if (!speaking && pred.class !== lastSpoken) {
+          objectEl.textContent = `👁️ I see a ${pred.class}`;
+          speak(`I see a ${pred.class}`);
         }
-
-        // --- PWA Service Worker Registration ---
-        // Registers the service worker for offline capabilities and PWA features.
-        if ('serviceWorker' in navigator) {
-            window.addEventListener('load', () => {
-                navigator.serviceWorker.register('service-worker.js')
-                    .then(registration => {
-                        console.log('Service Worker registered! Scope:', registration.scope);
-                    })
-                    .catch(err => {
-                        console.log('Service Worker registration failed:', err);
-                    });
-            });
-        }
-
-        /**
-         * Text-to-Speech (TTS) Function.
-         * Handles speaking text, applies cooldowns, and manages mute state.
-         * "emergency" type speech bypasses the mute setting.
-         * @param {string} text The text string to be spoken.
-         * @param {string} type The type of speech ('fullInfo', 'warning', 'emergency').
-         */
-        function speak(text, type = 'fullInfo') {
-            console.log(`[TTS Debug] Attempting to speak (${type}): "${text}"`);
-
-            let currentCooldown = 0;
-            let lastSpeechTimeRef = 0;
-
-            // Determine cooldown and last speech time based on type
-            if (type === 'fullInfo') {
-                currentCooldown = SPEECH_COOLDOWN_FULL_INFO;
-                lastSpeechTimeRef = lastFullInfoSpeechTime;
-            } else if (type === 'warning') {
-                currentCooldown = SPEECH_COOLDOWN_WARNING;
-                lastSpeechTimeRef = lastWarningSpeechTime;
-            } else if (type === 'emergency') { // 'emergency' type is used for critical alerts that bypass mute/cooldown
-                currentCooldown = 0; // Emergency alerts have no cooldown
-            }
-
-            // Block speech if muted (unless it's an emergency alert type)
-            if (isMuted && type !== 'emergency') {
-                console.log(`[TTS Debug] Speech (${type}) blocked: Muted.`);
-                return;
-            }
-
-            // Block speech if another speech is active or within cooldown
-            if (speaking || (Date.now() - lastSpeechTimeRef < currentCooldown)) {
-                console.log(`[TTS Debug] Speech (${type}) blocked due to cooldown or already speaking.`);
-                return;
-            }
-
-            // For critical speech (like emergency or immediate feedback), cancel any ongoing speech
-            if (type === 'emergency' && speechSynthesis.speaking) {
-                speechSynthesis.cancel();
-                console.log("[TTS Debug] Cancelled ongoing speech for emergency.");
-            } else if (type !== 'emergency' && speechSynthesis.speaking) {
-                // If other type of speech is requested while something else is speaking, defer it
-                console.log(`[TTS Debug] Speech (${type}) deferred, another speech is active.`);
-                return;
-            }
-
-            // Get available voices on the device
-            const voices = speechSynthesis.getVoices();
-            if (voices.length === 0) {
-                console.warn("[TTS Debug] No speech synthesis voices available on this device.");
-                statusEl.textContent = "❌ Speech not available (no voices)";
-                statusEl.style.color = 'red';
-                return;
-            } else {
-                 console.log("[TTS Debug] Available voices:", voices.map(v => v.name));
-            }
-
-            // Create a new SpeechSynthesisUtterance object
-            const utterance = new SpeechSynthesisUtterance(text);
-            utterance.lang = "en-IN"; // Set language to Indian English
-
-            // Try to find a specific Indian English voice for better pronunciation
-            const indianVoice = voices.find(voice => voice.lang === 'en-IN' || voice.lang === 'en-GB' || voice.name.includes('India'));
-            if (indianVoice) {
-                utterance.voice = indianVoice;
-                console.log("[TTS Debug] Using voice:", indianVoice.name);
-            } else {
-                console.warn("[TTS Debug] No specific Indian/GB English voice found, using default.");
-            }
-
-            // Speech properties
-            utterance.rate = 1.0;  // Normal speed (0.1 to 10)
-            utterance.pitch = 1.0; // Normal pitch (0 to 2)
-            utterance.volume = 1.0; // Full volume (0 to 1)
-
-            // Event handlers for speech lifecycle
-            utterance.onstart = () => { speaking = true; console.log("[TTS Debug] Speech started."); };
-            utterance.onend = () => {
-                speaking = false;
-                // Update last speech time based on type
-                if (type === 'fullInfo') {
-                    lastFullInfoSpeechTime = Date.now();
-                } else if (type === 'warning') {
-                    lastWarningSpeechTime = Date.now();
-                }
-                console.log("[TTS Debug] Speech ended.");
-            };
-            utterance.onerror = (event) => {
-                console.error('[TTS Debug] SpeechSynthesisUtterance.onerror:', event.error, event);
-                speaking = false;
-            };
-
-            // Speak the utterance
-            speechSynthesis.speak(utterance);
-        }
-
-        // --- Date and Time Update ---
-        function updateDateTime() {
-            const now = new Date();
-            const date = now.toDateString();
-            const time = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-            datetimeEl.textContent = `📅 ${date} | ⏰ ${time}`;
-        }
-        setInterval(updateDateTime, 1000); // Update every second
-        updateDateTime(); // Initial call to display immediately
-
-        // --- Camera Setup ---
-        async function setupCamera() {
-            try {
-                // Request video stream from the user's camera
-                const stream = await navigator.mediaDevices.getUserMedia({
-                    video: {
-                        facingMode: 'environment', // Prioritize the rear camera ('user' for front camera)
-                        width: { ideal: 640 }, // Request ideal resolution for performance and quality
-                        height: { ideal: 480 }
-                    },
-                    audio: false // We don't need audio input from this stream
-                });
-                video.srcObject = stream; // Assign the stream to the video element
-
-                return new Promise((resolve) => {
-                    video.onloadedmetadata = () => {
-                        video.play(); // Start playing the video stream
-                        resizeCanvas(); // Adjust canvas size to match video
-                        resolve(video); // Resolve the promise with the video element
-                    };
-                });
-            } catch (error) {
-                console.error("Error accessing camera:", error);
-                let errorMessage = "❌ Camera access denied or not available.";
-                if (error.name === "NotAllowedError") {
-                    errorMessage += " Please grant camera permissions."; // Specific message for permission denial
-                } else if (error.name === "NotFoundError") {
-                    errorMessage += " No suitable camera found."; // Specific message if no camera is found
-                }
-                statusEl.textContent = errorMessage; // Display error message in status area
-                statusEl.style.color = 'red'; // Set error message color to red
-                return null; // Indicate camera setup failed
-            }
-        }
-
-        // --- Canvas Resizing ---
-        // Ensures the canvas matches the video stream's actual dimensions for correct drawing.
-        function resizeCanvas() {
-            canvas.width = video.videoWidth;
-            canvas.height = video.videoHeight;
-        }
-
-        // --- Main Object Detection Loop ---
-        // Continuously detects objects in the video stream and updates the UI.
-        async function detectFrame() {
-            if (video.readyState < 2) { // Ensure video stream is fully loaded and ready
-                requestAnimationFrame(detectFrame); // Request next frame if not ready
-                return;
-            }
-
-            // Frame skipping for performance: only process every (FRAMES_TO_SKIP + 1) frame
-            frameCount++;
-            if (frameCount % (FRAMES_TO_SKIP + 1) !== 0) {
-                requestAnimationFrame(detectFrame); // Skip this frame and request the next
-                return;
-            }
-
-            let predictions;
-            try {
-                // Perform object detection on the video frame. This is an asynchronous operation.
-                if (model) { // Ensure model is loaded before attempting detection
-                    predictions = await model.detect(video);
-                } else {
-                    requestAnimationFrame(detectFrame); // If model not loaded, skip and try next frame
-                    return;
-                }
-            } catch (e) {
-                console.error("Error during model detection (async part):", e);
-                requestAnimationFrame(detectFrame); // Log error and continue to next frame
-                return;
-            }
-
-            // Use tf.tidy for synchronous TensorFlow.js operations (like drawing)
-            // to automatically manage and dispose of intermediate tensors, preventing memory leaks.
-            tf.tidy(() => {
-                ctx.clearRect(0, 0, canvas.width, canvas.height); // Clear previous drawings on canvas
-                // The video element itself is set to object-fit: cover, so drawing it on canvas
-                // as a background here is often not necessary and can be skipped for performance.
-                // ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-                let personDetected = false;
-                let detectedObjectsText = "👁️ No objects detected.";
-                let currentFrameObjects = []; // To store objects for Gemini
-
-                // Iterate over all detected objects
-                predictions.forEach(pred => {
-                    // Process only predictions with confidence score > 60%
-                    if (pred.score > 0.6) {
-                        const [x, y, width, height] = pred.bbox; // Bounding box coordinates and dimensions
-
-                        // Draw bounding box (green by default)
-                        ctx.strokeStyle = "#00FF00";
-                        ctx.lineWidth = 2;
-                        ctx.strokeRect(x, y, width, height);
-
-                        // Draw label text (e.g., "Person (95%)")
-                        ctx.fillStyle = "#00FF00";
-                        ctx.font = '16px sans-serif';
-                        ctx.fillText(`${pred.class} (${Math.round(pred.score * 100)}%)`, x, y > 10 ? y - 5 : 10);
-
-                        detectedObjectsText = `👁️ I see a ${pred.class}`; // Update detected object display
-
-                        currentFrameObjects.push({
-                            class: pred.class,
-                            score: pred.score,
-                            bbox: { x, y, width, height }
-                        });
-
-                        // Check specifically for 'person' class for proximity warning
-                        if (pred.class === 'person') {
-                            personDetected = true;
-                            // Trigger "very close" warning if person's bounding box height exceeds threshold
-                            if (height > PROXIMITY_THRESHOLD_HEIGHT) {
-                                // Change drawing style for "very close" warning to red and thicker
-                                ctx.strokeStyle = 'red';
-                                ctx.lineWidth = 4;
-                                ctx.strokeRect(x, y, width, height);
-                                ctx.fillStyle = 'red';
-                                ctx.fillText(`VERY CLOSE!`, x, y + height + 20); // Add "VERY CLOSE!" text
-                                speak("Warning: Person very close.", 'warning'); // Trigger warning speech
-                            }
-                        }
-                    }
-                });
-
-                objectEl.textContent = detectedObjectsText; // Update displayed object status
-
-                // Update proximity status text (simple person detection status)
-                if (personDetected) {
-                    proximityStatusEl.className = ''; // Remove warning style
-                    proximityStatusEl.textContent = "🟢 Person detected";
-                } else {
-                    proximityStatusEl.className = ''; // No warning, no person detected
-                    proximityStatusEl.textContent = "🟢 No person detected";
-                }
-
-                // Store objects for Gemini description
-                window.detectedObjectsForGemini = currentFrameObjects;
-            });
-
-            requestAnimationFrame(detectFrame); // Request the next animation frame to continue the loop
-        }
-
-        // --- Gemini API Integration for Scene Description ---
-        async function getSceneDescriptionFromGemini() {
-            if (currentRecognitionState !== 'IDLE') {
-                console.log("[Gemini] Skipping description request, app is busy.");
-                return;
-            }
-
-            currentRecognitionState = 'PROCESSING_GEMINI';
-            clearInterval(fullInfoIntervalId); // Pause periodic info
-            if (recognition) {
-                recognition.stop(); // Stop continuous listening
-            }
-            
-            speechRecognitionStatusEl.innerHTML = '<i class="fas fa-microchip"></i> Generating description...';
-            await speak("Generating scene description, please wait...", 'emergency'); // Emergency type to bypass mute
-
-            try {
-                // Get objects from the last frame
-                const objects = window.detectedObjectsForGemini || [];
-                let promptText = "Describe the following scene based on the detected objects. Make it concise and helpful for a visually impaired user. If no objects are present, say that the view is clear.\n\nDetected objects: ";
-
-                if (objects.length === 0) {
-                    promptText += "None.";
-                } else {
-                    const objectDescriptions = objects.map(obj => {
-                        const { x, y, width, height } = obj.bbox;
-                        // Calculate approximate position relative to frame center
-                        let position = '';
-                        const centerX = canvas.width / 2;
-                        const centerY = canvas.height / 2;
-                        const objectCenterX = x + width / 2;
-                        const objectCenterY = y + height / 2;
-
-                        if (width > canvas.width * 0.7 || height > canvas.height * 0.7) {
-                            position = 'very large, likely close,';
-                        } else if (width > canvas.width * 0.3 || height > canvas.height * 0.3) {
-                             position = 'large,';
-                        } else {
-                             position = 'small,';
-                        }
-
-                        if (objectCenterX < centerX * 0.7) position += ' to the left';
-                        else if (objectCenterX > centerX * 1.3) position += ' to the right';
-                        else position += ' in the center';
-
-                        if (objectCenterY < centerY * 0.7) position += ' (upper part)';
-                        else if (objectCenterY > centerY * 1.3) position += ' (lower part)';
-
-                        return `${position} ${obj.class}`;
-                    });
-                    promptText += objectDescriptions.join('; ') + ".";
-                }
-                
-                console.log("[Gemini] Prompt sent:", promptText);
-
-                let chatHistory = [];
-                chatHistory.push({ role: "user", parts: [{ text: promptText }] });
-                const payload = { contents: chatHistory };
-                const apiKey = ""; // API key is provided by Canvas runtime
-                const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
-
-                const response = await fetch(apiUrl, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
-                const result = await response.json();
-
-                let geminiDescription = "Could not generate description.";
-                if (result.candidates && result.candidates.length > 0 &&
-                    result.candidates[0].content && result.candidates[0].content.parts &&
-                    result.candidates[0].content.parts.length > 0) {
-                    geminiDescription = result.candidates[0].content.parts[0].text;
-                } else {
-                    console.error("[Gemini] Unexpected API response structure:", result);
-                    if (result.error && result.error.message) {
-                        geminiDescription = `API Error: ${result.error.message.substring(0, 50)}...`;
-                    }
-                }
-                
-                console.log("[Gemini] Received description:", geminiDescription);
-                await speak(geminiDescription, 'emergency'); // Speak the description
-
-            } catch (error) {
-                console.error("[Gemini] Error generating scene description:", error);
-                await speak("Failed to get scene description. Please check internet connection.", 'emergency');
-            } finally {
-                // Ensure recognition and periodic info resume after a short delay to let speech finish
-                setTimeout(() => {
-                    currentRecognitionState = 'IDLE';
-                    startContinuousRecognition();
-                    // NEW: Only resume full info speaking if emergency contact is valid
-                    if (loadEmergencyContact() && loadEmergencyContact().length === 10) {
-                        fullInfoIntervalId = setInterval(speakFullInformation, SPEECH_COOLDOWN_FULL_INFO);
-                        console.log("[SR Debug] Full info speaking resumed after Gemini.");
-                    } else {
-                        console.log("[SR Debug] Full info speaking remains paused as no emergency contact set.");
-                    }
-                }, 1000); // 1-second delay
-            }
-        }
-
-
-        /**
-         * Sets up the Web Speech Recognition API for continuous listening.
-         */
-        function setupSpeechRecognition() {
-            if (!SpeechRecognition) {
-                console.warn("Web Speech API (SpeechRecognition) not supported in this browser.");
-                speechRecognitionStatusEl.innerHTML = "❌ Voice commands not supported.";
-                speechRecognitionStatusEl.style.color = 'red';
-                return;
-            }
-
-            recognition = new SpeechRecognition();
-            recognition.continuous = true; // Listen continuously for general commands
-            recognition.interimResults = true; // Get partial results for smoother experience
-            recognition.lang = 'en-IN'; // Set recognition language to Indian English
-
-            // Event handler when speech recognition starts
-            recognition.onstart = () => {
-                console.log("[SR Debug] Recognition started. Continuous mode:", recognition.continuous);
-                // The status bar is always visible now, no display:block needed.
-            };
-
-            // Event handler for speech recognition results
-            recognition.onresult = (event) => {
-                const results = event.results;
-                for (let i = event.resultIndex; i < results.length; i++) {
-                    const transcript = results[i][0].transcript.toLowerCase().trim();
-                    const isFinal = results[i].isFinal;
-
-                    // Interim results processing: update status bar with what's being heard (only in IDLE state for commands)
-                    if (!isFinal && currentRecognitionState === 'IDLE') { 
-                        speechRecognitionStatusEl.innerHTML = `<i class="fas fa-microphone"></i> ${transcript}...`;
-                        continue; // Process next result if not final
-                    }
-
-
-                    if (isFinal) {
-                        console.log("[SR Debug] Final recognized:", transcript, "State:", currentRecognitionState);
-
-                        if (currentRecognitionState === 'IDLE') {
-                            // --- Mute/Unmute Commands ---
-                            if (transcript.includes("mute")) {
-                                isMuted = true;
-                                speak("Muted.", 'emergency');
-                                console.log("App muted by voice command.");
-                                speechRecognitionStatusEl.innerHTML = `<i class="fas fa-microphone"></i> Muted | Listening...`;
-                                continue;
-                            }
-                            if (transcript.includes("unmute")) {
-                                isMuted = false;
-                                speak("Unmuted.", 'emergency');
-                                console.log("App unmuted by voice command.");
-                                speechRecognitionStatusEl.innerHTML = `<i class="fas fa-microphone"></i> Listening for commands...`;
-                                continue;
-                            }
-                            // --- Scene Description Command (Gemini API) ---
-                            if (transcript.includes("describe scene") || transcript.includes("what do you see")) {
-                                getSceneDescriptionFromGemini();
-                                return; // Exit onresult, Gemini process takes over
-                            }
-                            // --- Emergency SMS Command ---
-                            if (transcript.includes("emergency")) {
-                                getUserLocation(); // Get location for SMS
-                                const storedNumber = loadEmergencyContact();
-                                if (storedNumber && storedNumber.length === 10) {
-                                    speak(`Sending emergency SMS to ${storedNumber}.`, 'emergency');
-                                    if(recognition) recognition.stop(); // Stop continuous recognition before opening external app
-                                    setTimeout(() => initiateSMS(storedNumber), 2000); // 2-second delay
-                                } else {
-                                    speak("Emergency contact number is not set. Please say, change emergency number, to set it.", 'emergency');
-                                }
-                                return; // Exit onresult, new flow might start
-                            }
-                            // --- Change Emergency Number command ---
-                            if (transcript.includes("change emergency number") || transcript.includes("set emergency number")) {
-                                getUserLocation(); // Attempt to get location in case it's needed later
-                                startEmergencySMSProcess(false); // Start the number change flow (not initial setup)
-                                return; // Exit onresult, new flow starts
-                            }
-                        }
-
-                        // --- Emergency SMS Flow Commands (Active only when not IDLE) ---
-                        if (currentRecognitionState === 'LISTENING_FOR_DIGITS') {
-                            // Normalize transcript to find digits more robustly (e.g., "one" to "1")
-                            const normalizedTranscript = transcript
-                                .replace(/zero/g, '0').replace(/one/g, '1').replace(/two/g, '2').replace(/three/g, '3')
-                                .replace(/four/g, '4').replace(/five/g, '5').replace(/six/g, '6').replace(/seven/g, '7')
-                                .replace(/eight/g, '8').replace(/nine/g, '9')
-                                .replace(/\s/g, ''); // Remove spaces if numbers are spoken individually but recognized as a phrase
-                            
-                            const digits = normalizedTranscript.match(/\d/g); // Extract all digits from the transcript
-
-                            if (digits) {
-                                currentEmergencyNumber += digits.join('');
-                                console.log("[SR Debug] Current number so far:", currentEmergencyNumber);
-
-                                if (currentEmergencyNumber.length < 10) {
-                                    speak(`You said ${transcript}. Current number is ${currentEmergencyNumber}. Please continue.`, 'emergency');
-                                    speechRecognitionStatusEl.innerHTML = `Number: ${currentEmergencyNumber} | <i class="fas fa-microphone"></i> Listening...`;
-                                    recognition.start(); // Restart listening for more digits
-                                    clearTimeout(emergencyTimeoutId);
-                                    emergencyTimeoutId = setTimeout(handleEmergencyTimeout, EMERGENCY_TIMEOUT_MS);
-                                } else {
-                                    currentEmergencyNumber = currentEmergencyNumber.substring(0, 10);
-                                    speak(`You said ${currentEmergencyNumber}. Is this correct? Say send to confirm, or correct to re-enter.`, 'emergency');
-                                    currentRecognitionState = 'NUMBER_COLLECTED_CONFIRMATION'; // Change state
-                                    speechRecognitionStatusEl.innerHTML = `Confirm: ${currentEmergencyNumber} | <i class="fas fa-microphone"></i> Listening...`;
-                                    recognition.start(); // Listen for confirmation
-                                    clearTimeout(emergencyTimeoutId);
-                                    emergencyTimeoutId = setTimeout(handleEmergencyTimeout, EMERGENCY_TIMEOUT_MS);
-                                }
-                            } else if (transcript.includes("cancel")) {
-                                speak("Emergency SMS process cancelled.", 'emergency');
-                                resetEmergencyState();
-                            } else {
-                                speak("I didn't hear any digits. Please speak the 10-digit phone number, digit by digit.", 'emergency');
-                                speechRecognitionStatusEl.innerHTML = '<i class="fas fa-microphone"></i> Listening for number...';
-                                recognition.start();
-                                clearTimeout(emergencyTimeoutId);
-                                emergencyTimeoutId = setTimeout(handleEmergencyTimeout, EMERGENCY_TIMEOUT_MS);
-                            }
-                        } else if (currentRecognitionState === 'NUMBER_COLLECTED_CONFIRMATION') {
-                            if (transcript.includes("send") || transcript.includes("yes") || transcript.includes("confirm")) { // Added "confirm"
-                                saveEmergencyContact(currentEmergencyNumber); // Save the confirmed number
-                                speak("Emergency contact number saved. You are now ready to go.", 'emergency'); // NEW: Confirmation speech
-                                speakFullInformation(); // Speak full info once immediately
-                                resetEmergencyState(); // Reset state
-                                // fullInfoIntervalId will be set in resetEmergencyState
-                                // initiateSMS(currentEmergencyNumber); // Removed immediate SMS sending after setting number, only on "emergency" command
-                            } else if (transcript.includes("correct") || transcript.includes("no") || transcript.includes("clear") || transcript.includes("redo")) { // Added "redo"
-                                speak("Okay, please re-enter the 10-digit number, digit by digit.", 'emergency');
-                                currentEmergencyNumber = '';
-                                currentRecognitionState = 'LISTENING_FOR_DIGITS';
-                                speechRecognitionStatusEl.innerHTML = '<i class="fas fa-microphone"></i> Listening for number...';
-                                recognition.start();
-                                clearTimeout(emergencyTimeoutId);
-                                emergencyTimeoutId = setTimeout(handleEmergencyTimeout, EMERGENCY_TIMEOUT_MS);
-                            } else {
-                                speak(`I did not understand your confirmation. Say send or correct.`, 'emergency');
-                                speechRecognitionStatusEl.innerHTML = `Confirm: ${currentEmergencyNumber} | <i class="fas fa-microphone"></i> Listening...`;
-                                recognition.start();
-                                clearTimeout(emergencyTimeoutId);
-                                emergencyTimeoutId = setTimeout(handleEmergencyTimeout, EMERGENCY_TIMEOUT_MS);
-                            }
-                        }
-                    }
-                }
-            };
-
-            // Event handler for speech recognition errors
-            recognition.onerror = (event) => {
-                console.error("[SR Debug] Speech recognition error:", event.error, event.message);
-                
-                if (currentRecognitionState === 'IDLE') {
-                   if (event.error === 'no-speech') {
-                       console.log("[SR Debug] No speech detected (continuous mode).");
-                   } else if (event.error === 'not-allowed') {
-                       speak("Microphone permission denied. Voice commands are disabled.", 'emergency');
-                       speechRecognitionStatusEl.innerHTML = "❌ Mic permission denied!";
-                       speechRecognitionStatusEl.style.color = 'red';
-                       recognition.continuous = false; // Stop trying to restart if permission denied
-                   } else if (event.error === 'network') {
-                       speak("Voice commands require an internet connection.", 'emergency');
-                       speechRecognitionStatusEl.innerHTML = "🌐 No internet for voice!";
-                       speechRecognitionStatusEl.style.color = 'orange';
-                   } else {
-                       speak("A voice command error occurred. Trying to restart.", 'emergency');
-                       speechRecognitionStatusEl.innerHTML = `⚠️ Voice error: ${event.error}`;
-                       speechRecognitionStatusEl.style.color = 'orange';
-                   }
-                } else { // If in an active emergency flow (number dictation/confirmation)
-                    speak("An error occurred during voice input. Please try again.", 'emergency');
-                    resetEmergencyState(); // Reset emergency flow
-                }
-
-                // Attempt to restart continuous recognition if it was supposed to be running
-                if (currentRecognitionState === 'IDLE' && recognition.continuous && event.error !== 'not-allowed') {
-                    console.log("[SR Debug] Attempting to restart continuous recognition after error.");
-                    try {
-                         recognition.start();
-                    } catch (e) {
-                         console.error("[SR Debug] Failed to restart recognition:", e);
-                    }
-                }
-            };
-
-            // Event handler when speech recognition ends
-            recognition.onend = () => {
-                if (currentRecognitionState === 'IDLE' && recognition.continuous) {
-                    console.log("[SR Debug] Continuous recognition ended, restarting...");
-                    try {
-                        recognition.start(); // Automatically restart to maintain continuous listening
-                    } catch (e) {
-                        console.warn("[SR Debug] Failed to restart continuous recognition:", e);
-                    }
-                } else if (currentRecognitionState === 'LISTENING_FOR_DIGITS' || currentRecognitionState === 'NUMBER_COLLECTED_CONFIRMATION') {
-                    // In emergency number input, recognition is started manually
-                    console.log("[SR Debug] Emergency number input recognition ended. Waiting for explicit start.");
-                } else {
-                    // For other states like PROCESSING_GEMINI, recognition is stopped explicitly and then restarted later.
-                    console.log("[SR Debug] Non-IDLE recognition ended. Manual restart expected.");
-                }
-            };
-        }
-
-        // Helper function to start continuous recognition (used after emergency flow ends)
-        function startContinuousRecognition() {
-            if (recognition && currentRecognitionState === 'IDLE') {
-                try {
-                    recognition.continuous = true;
-                    recognition.interimResults = true;
-                    recognition.start();
-                    console.log("[SR Debug] Continuous recognition started.");
-                    speechRecognitionStatusEl.innerHTML = '<i class="fas fa-microphone"></i> Listening for commands...';
-                } catch (e) {
-                    console.warn("[SR Debug] Recognition start failed (likely already running or permission issue):", e);
-                    if (e.message.includes("already started")) {
-                        // Ignore if already started
-                    } else if (e.message.includes("permission")) {
-                         speechRecognitionStatusEl.innerHTML = "❌ Mic permission needed!";
-                         speechRecognitionStatusEl.style.color = 'red';
-                    }
-                }
-            } else {
-                 console.log("[SR Debug] Cannot start continuous recognition. Recognition object not ready or not IDLE state.");
-            }
-        }
-
-
-        /**
-         * Opens the device's default messaging app with a pre-filled SMS.
-         * Note: Cannot send SMS directly; user must tap "Send" in the app.
-         * @param {string} phoneNumber The recipient's 10-digit phone number.
-         */
-        function initiateSMS(phoneNumber) {
-            let message = "Emergency! I need assistance.";
-            // Add approximate location to message if available
-            if (userLocation) {
-                message += ` My approximate location is https://maps.google.com/?q=${userLocation.latitude},${userLocation.longitude}`;
-            }
-
-            // Construct the SMS URL using 'sms:' URI scheme
-            const smsUrl = `sms:${phoneNumber}?body=${encodeURIComponent(message)}`;
-            window.location.href = smsUrl; // Redirect to open the messaging app
-
-            // Inform the user about the manual sending step
-            speak("Opening your messaging app to send the SMS. Please review the message and tap send.", 'emergency');
-            console.log("[SMS Debug] SMS URL generated:", smsUrl);
-
-            // After initiating SMS, restart continuous listening after a short delay
-            setTimeout(startContinuousRecognition, 5000); // Give time for messaging app to open/user to react
-        }
-
-
-        // --- Initial App Load Function ---
-        async function main() {
-            statusEl.textContent = "🔄 Loading AI model... SafeVision";
-            // Delay to allow browser to prepare SpeechSynthesis voices and potentially satisfy autoplay policy
-            await new Promise(resolve => setTimeout(resolve, 500));
-
-            // Set up listener for when voices are loaded/changed
-            speechSynthesis.onvoiceschanged = () => {
-                console.log("[TTS Debug] Voices loaded event fired. Voices:", speechSynthesis.getVoices().map(v => v.name));
-            };
-            // Call getVoices immediately to populate the list if they're already ready
-            speechSynthesis.getVoices();
-
-            await setupCamera(); // Set up camera
-            if (!video.srcObject) { // If camera setup fails, stop main execution
-                console.error("Camera setup failed, aborting main execution.");
-                return;
-            }
-
-            // Load the COCO-SSD AI model (lite_mobilenet_v2 for performance)
-            model = await cocoSsd.load({base: 'lite_mobilenet_v2'});
-            statusEl.textContent = "✅ AI model loaded!";
-
-            setupSpeechRecognition(); // Initialize speech recognition object
-
-            // NEW: Check for existing emergency contact on first load
-            const storedEmergencyNumber = loadEmergencyContact();
-            if (!storedEmergencyNumber || storedEmergencyNumber.length !== 10) {
-                // If no valid number stored, prompt for it
-                getUserLocation(); // Get location for potential first SMS
-                await startEmergencySMSProcess(true); // True for initial setup, await to ensure prompt is spoken
-                // fullInfoIntervalId will NOT start here. It starts only after number is confirmed.
-            } else {
-                // Number already set, proceed with continuous listening
-                currentEmergencyNumber = storedEmergencyNumber; // Load it into current var
-                startContinuousRecognition(); // Explicitly start continuous listening for commands
-                await speak("Welcome back to SafeVision.", 'fullInfo'); // Welcome message for returning users
-                // NEW: Speak full info once immediately after welcome
-                speakFullInformation();
-                // NEW: Start the periodic interval only after welcome and first info is spoken
-                fullInfoIntervalId = setInterval(speakFullInformation, SPEECH_COOLDOWN_FULL_INFO); // Store interval ID
-            }
-            
-            detectFrame(); // Start the continuous object detection loop
-        }
-
-        // --- Function to combine all displayed info for periodic speech ---
-        function speakFullInformation() {
-            // Only speak if in IDLE state, to avoid interrupting other processes
-            // AND only if a valid emergency contact number is set
-            if (currentRecognitionState === 'IDLE' && loadEmergencyContact() && loadEmergencyContact().length === 10) {
-                const combinedText = `
-                    Status: ${statusEl.textContent}.
-                    Weather: ${weatherEl.textContent}.
-                    Date and Time: ${datetimeEl.textContent}.
-                    Object detection: ${objectEl.textContent}.
-                    Proximity status: ${proximityStatusEl.textContent}.
-                `.replace(/\s+/g, ' ').trim(); // Clean up extra spaces
-
-                // Only speak if the combined text has changed since the last full info speech
-                if (combinedText !== lastSpokenFullInfo) {
-                    speak(combinedText, 'fullInfo');
-                    lastSpokenFullInfo = combinedText;
-                }
-            } else {
-                // This is expected behavior if app is busy or no number set
-                console.log("[Full Info] Skipping periodic announcement: App is not in IDLE state or no emergency contact set.");
-            }
-        }
-
-        // Start the application once the DOM is fully loaded
-        document.addEventListener('DOMContentLoaded', main);
-    </script>
+      });
+      requestAnimationFrame(detectFrame);
+    }
+
+    async function setupCamera() {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { exact: "environment" } } });
+      video.srcObject = stream;
+      return new Promise(resolve => video.onloadedmetadata = () => { video.play(); resolve(video); });
+    }
+
+    async function mainDetection() {
+      updateDateTime();
+      await setupCamera();
+      model = await cocoSsd.load();
+      statusEl.textContent = "✅ AI model loaded";
+      speak("AI model loaded successfully.");
+      detectFrame();
+    }
+
+    // Start App
+    window.onload = () => {
+      currentEmergencyNumber = loadEmergencyContact();
+      if (!currentEmergencyNumber || currentEmergencyNumber.length !== 10) {
+        speak("Please speak your 10 digit emergency contact number, digit by digit.");
+        listenForEmergencyNumber();
+      } else {
+        mainDetection();
+      }
+    };
+  </script>
 </body>
 </html>
