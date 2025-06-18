@@ -118,7 +118,7 @@
         let isMuted = false; // Controls general app speech (emergency warnings bypass this)
 
         // Speech cooldown periods to prevent rapid-fire alerts
-        const SPEECH_COOLDOWN_FULL_INFO = 50000; // 50 seconds cooldown for periodic info updates
+        const SPEECH_COOLDOWN_FULL_INFO = 60000; // NEW: 60 seconds (1 minute) cooldown for periodic info updates
         const SPEECH_COOLDOWN_WARNING = 3000; // 3 seconds cooldown for proximity warnings
         let lastFullInfoSpeechTime = 0; // Timestamp of last full info speech
         let lastWarningSpeechTime = 0; // Timestamp of last warning speech
@@ -134,11 +134,10 @@
         const PROXIMITY_THRESHOLD_HEIGHT = 450;
 
         // --- Web Speech Recognition API Setup ---
-        // Provides voice-to-text functionality for commands and emergency flow
+        // Provides voice-to-text functionality for commands
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
         let recognition; // Instance of SpeechRecognition
-        let emergencyCallState = 'IDLE'; // State machine for emergency SMS process
-        // States: 'IDLE', 'PROMPT_INITIAL_NUMBER', 'LISTENING_FOR_DIGITS', 'NUMBER_COLLECTED_CONFIRMATION'
+        let currentRecognitionState = 'IDLE'; // 'IDLE', 'PROCESSING_GEMINI', 'LISTENING_FOR_DIGITS', 'NUMBER_COLLECTED_CONFIRMATION'
         let currentEmergencyNumber = ''; // Stores digits spoken by user for emergency SMS
         const EMERGENCY_TIMEOUT_MS = 10000; // 10 seconds for user to respond during emergency flow
         let emergencyTimeoutId; // Timeout ID for emergency response waits
@@ -181,7 +180,7 @@
         /**
          * Text-to-Speech (TTS) Function.
          * Handles speaking text, applies cooldowns, and manages mute state.
-         * Emergency type speech bypasses the mute setting.
+         * "emergency" type speech bypasses the mute setting.
          * @param {string} text The text string to be spoken.
          * @param {string} type The type of speech ('fullInfo', 'warning', 'emergency').
          */
@@ -198,11 +197,11 @@
             } else if (type === 'warning') {
                 currentCooldown = SPEECH_COOLDOWN_WARNING;
                 lastSpeechTimeRef = lastWarningSpeechTime;
-            } else if (type === 'emergency') {
+            } else if (type === 'emergency') { // 'emergency' type is used for critical alerts that bypass mute/cooldown
                 currentCooldown = 0; // Emergency alerts have no cooldown
             }
 
-            // Block speech if muted (unless it's an emergency alert)
+            // Block speech if muted (unless it's an emergency alert type)
             if (isMuted && type !== 'emergency') {
                 console.log(`[TTS Debug] Speech (${type}) blocked: Muted.`);
                 return;
@@ -214,7 +213,7 @@
                 return;
             }
 
-            // For emergency speech, cancel any ongoing speech to ensure it plays immediately
+            // For critical speech (like emergency or immediate feedback), cancel any ongoing speech
             if (type === 'emergency' && speechSynthesis.speaking) {
                 speechSynthesis.cancel();
                 console.log("[TTS Debug] Cancelled ongoing speech for emergency.");
@@ -365,8 +364,8 @@
                 // ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
                 let personDetected = false;
-                let isPersonClose = false;
                 let detectedObjectsText = "👁️ No objects detected.";
+                let currentFrameObjects = []; // To store objects for Gemini
 
                 // Iterate over all detected objects
                 predictions.forEach(pred => {
@@ -386,18 +385,24 @@
 
                         detectedObjectsText = `👁️ I see a ${pred.class}`; // Update detected object display
 
+                        currentFrameObjects.push({
+                            class: pred.class,
+                            score: pred.score,
+                            bbox: { x, y, width, height }
+                        });
+
                         // Check specifically for 'person' class for proximity warning
                         if (pred.class === 'person') {
                             personDetected = true;
                             // Trigger "very close" warning if person's bounding box height exceeds threshold
                             if (height > PROXIMITY_THRESHOLD_HEIGHT) {
-                                isPersonClose = true;
                                 // Change drawing style for "very close" warning to red and thicker
                                 ctx.strokeStyle = 'red';
                                 ctx.lineWidth = 4;
                                 ctx.strokeRect(x, y, width, height);
                                 ctx.fillStyle = 'red';
                                 ctx.fillText(`VERY CLOSE!`, x, y + height + 20); // Add "VERY CLOSE!" text
+                                speak("Warning: Person very close.", 'warning'); // Trigger warning speech
                             }
                         }
                     }
@@ -405,123 +410,127 @@
 
                 objectEl.textContent = detectedObjectsText; // Update displayed object status
 
-                // Update proximity status text and trigger speech alerts
-                if (isPersonClose) {
-                    proximityStatusEl.className = 'warning-text'; // Apply red style
-                    proximityStatusEl.textContent = "🔴 WARNING: Person very close!";
-                    speak("Warning: Person very close.", 'warning'); // Trigger warning speech
-                } else if (personDetected) {
+                // Update proximity status text (simple person detection status)
+                if (personDetected) {
                     proximityStatusEl.className = ''; // Remove warning style
                     proximityStatusEl.textContent = "🟢 Person detected";
-                    // No speech for simple person detection
                 } else {
                     proximityStatusEl.className = ''; // No warning, no person detected
                     proximityStatusEl.textContent = "🟢 No person detected";
                 }
+
+                // Store objects for Gemini description
+                window.detectedObjectsForGemini = currentFrameObjects;
             });
 
             requestAnimationFrame(detectFrame); // Request the next animation frame to continue the loop
         }
 
-        // --- Emergency SMS Features ---
-
-        /**
-         * Attempts to get the user's approximate geographical location.
-         * Stores it in `userLocation` variable.
-         */
-        function getUserLocation() {
-            if (navigator.geolocation) {
-                // Request current position with options for accuracy and timeout
-                navigator.geolocation.getCurrentPosition(position => {
-                    userLocation = {
-                        latitude: position.coords.latitude.toFixed(4),
-                        longitude: position.coords.longitude.toFixed(4)
-                    };
-                    console.log("[Location Debug] User location:", userLocation);
-                }, error => {
-                    console.error("[Location Debug] Error getting location:", error);
-                    userLocation = null; // Clear location if error occurs
-                }, { enableHighAccuracy: false, timeout: 5000, maximumAge: 0 }); // Low accuracy, fast timeout
-            } else {
-                console.warn("[Location Debug] Geolocation not supported by browser.");
-                userLocation = null;
-            }
-        }
-
-        /**
-         * Initiates the voice-guided emergency SMS process (for setup or actual emergency).
-         * @param {boolean} isInitialSetup True if this is the first time setting the number.
-         */
-        async function startEmergencySMSProcess(isInitialSetup = false) { // Made async for speak()
-            if (!SpeechRecognition) {
-                speak("Voice commands are not supported in this browser. Please use your phone's messaging app manually.", 'emergency');
+        // --- Gemini API Integration for Scene Description ---
+        async function getSceneDescriptionFromGemini() {
+            if (currentRecognitionState !== 'IDLE') {
+                console.log("[Gemini] Skipping description request, app is busy.");
                 return;
             }
-            
-            // NEW: Stop continuous recognition temporarily AND clear the periodic full info interval
+
+            currentRecognitionState = 'PROCESSING_GEMINI';
+            clearInterval(fullInfoIntervalId); // Pause periodic info
             if (recognition) {
-                recognition.stop();
-            }
-            recognition.continuous = false; // Set to false for single-phrase listening in emergency flow
-
-            clearInterval(fullInfoIntervalId); 
-            console.log("[SR Debug] Full info speaking paused.");
-
-            currentEmergencyNumber = ''; // Reset the number for new input
-            emergencyCallState = 'LISTENING_FOR_DIGITS'; // Set state to listen for digits
-
-            if (isInitialSetup) {
-                await speak("Welcome to SafeVision. First, please speak the 10-digit emergency contact number, digit by digit. This number will be saved.", 'emergency');
-            } else {
-                await speak("Please speak the 10-digit phone number, digit by digit.", 'emergency');
+                recognition.stop(); // Stop continuous listening
             }
             
-            // Delay starting recognition until speech is done
-            setTimeout(() => {
-                speechRecognitionStatusEl.innerHTML = '<i class="fas fa-microphone"></i> Listening for number...';
-                recognition.start(); // Start speech recognition for number input
-                clearTimeout(emergencyTimeoutId); // Clear any previous timeout
-                // Set a timeout for the user's initial response
-                emergencyTimeoutId = setTimeout(() => {
-                    handleEmergencyTimeout();
-                }, EMERGENCY_TIMEOUT_MS);
-                console.log("[SR Debug] Recognition started for digits after speech.");
-            }, 500); // Small delay to let speech finish
+            speechRecognitionStatusEl.innerHTML = '<i class="fas fa-microchip"></i> Generating description...';
+            await speak("Generating scene description, please wait...", 'emergency'); // Emergency type to bypass mute
 
-            console.log("[SR Debug] Initializing listening for digits.");
+            try {
+                // Get objects from the last frame
+                const objects = window.detectedObjectsForGemini || [];
+                let promptText = "Describe the following scene based on the detected objects. Make it concise and helpful for a visually impaired user. If no objects are present, say that the view is clear.\n\nDetected objects: ";
+
+                if (objects.length === 0) {
+                    promptText += "None.";
+                } else {
+                    const objectDescriptions = objects.map(obj => {
+                        const { x, y, width, height } = obj.bbox;
+                        // Calculate approximate position relative to frame center
+                        let position = '';
+                        const centerX = canvas.width / 2;
+                        const centerY = canvas.height / 2;
+                        const objectCenterX = x + width / 2;
+                        const objectCenterY = y + height / 2;
+
+                        if (width > canvas.width * 0.7 || height > canvas.height * 0.7) {
+                            position = 'very large, likely close,';
+                        } else if (width > canvas.width * 0.3 || height > canvas.height * 0.3) {
+                             position = 'large,';
+                        } else {
+                             position = 'small,';
+                        }
+
+                        if (objectCenterX < centerX * 0.7) position += ' to the left';
+                        else if (objectCenterX > centerX * 1.3) position += ' to the right';
+                        else position += ' in the center';
+
+                        if (objectCenterY < centerY * 0.7) position += ' (upper part)';
+                        else if (objectCenterY > centerY * 1.3) position += ' (lower part)';
+
+                        return `${position} ${obj.class}`;
+                    });
+                    promptText += objectDescriptions.join('; ') + ".";
+                }
+                
+                console.log("[Gemini] Prompt sent:", promptText);
+
+                let chatHistory = [];
+                chatHistory.push({ role: "user", parts: [{ text: promptText }] });
+                const payload = { contents: chatHistory };
+                const apiKey = ""; // API key is provided by Canvas runtime
+                const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+
+                const response = await fetch(apiUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const result = await response.json();
+
+                let geminiDescription = "Could not generate description.";
+                if (result.candidates && result.candidates.length > 0 &&
+                    result.candidates[0].content && result.candidates[0].content.parts &&
+                    result.candidates[0].content.parts.length > 0) {
+                    geminiDescription = result.candidates[0].content.parts[0].text;
+                } else {
+                    console.error("[Gemini] Unexpected API response structure:", result);
+                    if (result.error && result.error.message) {
+                        geminiDescription = `API Error: ${result.error.message.substring(0, 50)}...`;
+                    }
+                }
+                
+                console.log("[Gemini] Received description:", geminiDescription);
+                await speak(geminiDescription, 'emergency'); // Speak the description
+
+            } catch (error) {
+                console.error("[Gemini] Error generating scene description:", error);
+                await speak("Failed to get scene description. Please check internet connection.", 'emergency');
+            } finally {
+                // Ensure recognition and periodic info resume after a short delay to let speech finish
+                setTimeout(() => {
+                    currentRecognitionState = 'IDLE';
+                    startContinuousRecognition();
+                    // NEW: Only resume full info speaking if emergency contact is valid
+                    if (loadEmergencyContact() && loadEmergencyContact().length === 10) {
+                        fullInfoIntervalId = setInterval(speakFullInformation, SPEECH_COOLDOWN_FULL_INFO);
+                        console.log("[SR Debug] Full info speaking resumed after Gemini.");
+                    } else {
+                        console.log("[SR Debug] Full info speaking remains paused as no emergency contact set.");
+                    }
+                }, 1000); // 1-second delay
+            }
         }
 
-        /**
-         * Handles timeouts during the emergency SMS process.
-         */
-        function handleEmergencyTimeout() {
-            recognition.stop(); // Stop recognition
-            speak("No response. Emergency SMS process cancelled.", 'emergency');
-            resetEmergencyState(); // Reset emergency state
-            console.log("[SR Debug] Emergency process timed out.");
-            // NEW: Restart continuous listening after emergency flow is done/timed out
-            startContinuousRecognition(); 
-        }
 
         /**
-         * Resets the emergency SMS process state variables.
-         */
-        function resetEmergencyState() {
-            emergencyCallState = 'IDLE';
-            currentEmergencyNumber = '';
-            // Only update status bar if not during the initial setup/number collection phase.
-            // When going back to IDLE, the continuous listener will set the appropriate status.
-            speechRecognitionStatusEl.innerHTML = '<i class="fas fa-microphone"></i> Listening for commands...'; 
-            clearTimeout(emergencyTimeoutId); // Clear any pending timeout
-            // Don't stop recognition here, let continuous mode handle it
-            console.log("[SR Debug] Emergency state reset to IDLE.");
-            // NEW: Resume the periodic full info interval
-            fullInfoIntervalId = setInterval(speakFullInformation, SPEECH_COOLDOWN_FULL_INFO);
-            console.log("[SR Debug] Full info speaking resumed.");
-        }
-
-        /**
-         * Sets up the Web Speech Recognition API for continuous listening or emergency flow.
+         * Sets up the Web Speech Recognition API for continuous listening.
          */
         function setupSpeechRecognition() {
             if (!SpeechRecognition) {
@@ -539,6 +548,7 @@
             // Event handler when speech recognition starts
             recognition.onstart = () => {
                 console.log("[SR Debug] Recognition started. Continuous mode:", recognition.continuous);
+                // The status bar is always visible now, no display:block needed.
             };
 
             // Event handler for speech recognition results
@@ -548,18 +558,18 @@
                     const transcript = results[i][0].transcript.toLowerCase().trim();
                     const isFinal = results[i].isFinal;
 
-                    // Display interim results during number dictation
-                    if (!isFinal && (emergencyCallState === 'LISTENING_FOR_DIGITS' || emergencyCallState === 'NUMBER_COLLECTED_CONFIRMATION')) {
-                        speechRecognitionStatusEl.innerHTML = `<i class="fas fa-microphone"></i> ${currentEmergencyNumber}${transcript}...`;
+                    // Interim results processing: update status bar with what's being heard (only in IDLE state for commands)
+                    if (!isFinal && currentRecognitionState === 'IDLE') { 
+                        speechRecognitionStatusEl.innerHTML = `<i class="fas fa-microphone"></i> ${transcript}...`;
                         continue; // Process next result if not final
                     }
 
 
                     if (isFinal) {
-                        console.log("[SR Debug] Final recognized:", transcript, "State:", emergencyCallState);
+                        console.log("[SR Debug] Final recognized:", transcript, "State:", currentRecognitionState);
 
-                        // --- Main Command Handling (IDLE state) ---
-                        if (emergencyCallState === 'IDLE') {
+                        if (currentRecognitionState === 'IDLE') {
+                            // --- Mute/Unmute Commands ---
                             if (transcript.includes("mute")) {
                                 isMuted = true;
                                 speak("Muted.", 'emergency');
@@ -574,14 +584,17 @@
                                 speechRecognitionStatusEl.innerHTML = `<i class="fas fa-microphone"></i> Listening for commands...`;
                                 continue;
                             }
+                            // --- Scene Description Command (Gemini API) ---
+                            if (transcript.includes("describe scene") || transcript.includes("what do you see")) {
+                                getSceneDescriptionFromGemini();
+                                return; // Exit onresult, Gemini process takes over
+                            }
+                            // --- Emergency SMS Command ---
                             if (transcript.includes("emergency")) {
                                 getUserLocation(); // Get location for SMS
-                                // Check if number is set before starting full SMS process
                                 const storedNumber = loadEmergencyContact();
                                 if (storedNumber && storedNumber.length === 10) {
                                     speak(`Sending emergency SMS to ${storedNumber}.`, 'emergency');
-                                    // Add a slight delay to allow speech to finish before opening SMS app
-                                    // Also stop recognition before opening external app
                                     if(recognition) recognition.stop(); // Stop continuous recognition before opening external app
                                     setTimeout(() => initiateSMS(storedNumber), 2000); // 2-second delay
                                 } else {
@@ -589,7 +602,7 @@
                                 }
                                 return; // Exit onresult, new flow might start
                             }
-                            // NEW: Change Emergency Number command
+                            // --- Change Emergency Number command ---
                             if (transcript.includes("change emergency number") || transcript.includes("set emergency number")) {
                                 getUserLocation(); // Attempt to get location in case it's needed later
                                 startEmergencySMSProcess(false); // Start the number change flow (not initial setup)
@@ -598,7 +611,7 @@
                         }
 
                         // --- Emergency SMS Flow Commands (Active only when not IDLE) ---
-                        if (emergencyCallState === 'LISTENING_FOR_DIGITS') {
+                        if (currentRecognitionState === 'LISTENING_FOR_DIGITS') {
                             // Normalize transcript to find digits more robustly (e.g., "one" to "1")
                             const normalizedTranscript = transcript
                                 .replace(/zero/g, '0').replace(/one/g, '1').replace(/two/g, '2').replace(/three/g, '3')
@@ -621,7 +634,7 @@
                                 } else {
                                     currentEmergencyNumber = currentEmergencyNumber.substring(0, 10);
                                     speak(`You said ${currentEmergencyNumber}. Is this correct? Say send to confirm, or correct to re-enter.`, 'emergency');
-                                    emergencyCallState = 'NUMBER_COLLECTED_CONFIRMATION';
+                                    currentRecognitionState = 'NUMBER_COLLECTED_CONFIRMATION'; // Change state
                                     speechRecognitionStatusEl.innerHTML = `Confirm: ${currentEmergencyNumber} | <i class="fas fa-microphone"></i> Listening...`;
                                     recognition.start(); // Listen for confirmation
                                     clearTimeout(emergencyTimeoutId);
@@ -637,16 +650,18 @@
                                 clearTimeout(emergencyTimeoutId);
                                 emergencyTimeoutId = setTimeout(handleEmergencyTimeout, EMERGENCY_TIMEOUT_MS);
                             }
-                        } else if (emergencyCallState === 'NUMBER_COLLECTED_CONFIRMATION') {
+                        } else if (currentRecognitionState === 'NUMBER_COLLECTED_CONFIRMATION') {
                             if (transcript.includes("send") || transcript.includes("yes") || transcript.includes("confirm")) { // Added "confirm"
-                                saveEmergencyContact(currentEmergencyNumber); // NEW: Save the confirmed number
-                                speak("Emergency contact number saved. Opening your messaging app to send the SMS. Please review the message and tap send.", 'emergency');
-                                initiateSMS(currentEmergencyNumber);
-                                resetEmergencyState();
+                                saveEmergencyContact(currentEmergencyNumber); // Save the confirmed number
+                                speak("Emergency contact number saved. You are now ready to go.", 'emergency'); // NEW: Confirmation speech
+                                speakFullInformation(); // Speak full info once immediately
+                                resetEmergencyState(); // Reset state
+                                // fullInfoIntervalId will be set in resetEmergencyState
+                                // initiateSMS(currentEmergencyNumber); // Removed immediate SMS sending after setting number, only on "emergency" command
                             } else if (transcript.includes("correct") || transcript.includes("no") || transcript.includes("clear") || transcript.includes("redo")) { // Added "redo"
                                 speak("Okay, please re-enter the 10-digit number, digit by digit.", 'emergency');
                                 currentEmergencyNumber = '';
-                                emergencyCallState = 'LISTENING_FOR_DIGITS';
+                                currentRecognitionState = 'LISTENING_FOR_DIGITS';
                                 speechRecognitionStatusEl.innerHTML = '<i class="fas fa-microphone"></i> Listening for number...';
                                 recognition.start();
                                 clearTimeout(emergencyTimeoutId);
@@ -667,7 +682,7 @@
             recognition.onerror = (event) => {
                 console.error("[SR Debug] Speech recognition error:", event.error, event.message);
                 
-                if (emergencyCallState === 'IDLE') {
+                if (currentRecognitionState === 'IDLE') {
                    if (event.error === 'no-speech') {
                        console.log("[SR Debug] No speech detected (continuous mode).");
                    } else if (event.error === 'not-allowed') {
@@ -684,13 +699,13 @@
                        speechRecognitionStatusEl.innerHTML = `⚠️ Voice error: ${event.error}`;
                        speechRecognitionStatusEl.style.color = 'orange';
                    }
-                } else { // If in an active emergency flow
-                    speak("An error occurred during emergency voice command. Please try again.", 'emergency');
+                } else { // If in an active emergency flow (number dictation/confirmation)
+                    speak("An error occurred during voice input. Please try again.", 'emergency');
                     resetEmergencyState(); // Reset emergency flow
                 }
 
                 // Attempt to restart continuous recognition if it was supposed to be running
-                if (emergencyCallState === 'IDLE' && recognition.continuous && event.error !== 'not-allowed') {
+                if (currentRecognitionState === 'IDLE' && recognition.continuous && event.error !== 'not-allowed') {
                     console.log("[SR Debug] Attempting to restart continuous recognition after error.");
                     try {
                          recognition.start();
@@ -702,23 +717,26 @@
 
             // Event handler when speech recognition ends
             recognition.onend = () => {
-                if (emergencyCallState === 'IDLE' && recognition.continuous) {
+                if (currentRecognitionState === 'IDLE' && recognition.continuous) {
                     console.log("[SR Debug] Continuous recognition ended, restarting...");
                     try {
                         recognition.start(); // Automatically restart to maintain continuous listening
                     } catch (e) {
                         console.warn("[SR Debug] Failed to restart continuous recognition:", e);
                     }
-                } else if (emergencyCallState !== 'IDLE' && !recognition.continuous) {
-                    // For single-phrase modes within emergency flow, only restart if logic explicitly calls it
-                    console.log("[SR Debug] Emergency flow single-phrase recognition ended. Will restart if needed.");
+                } else if (currentRecognitionState === 'LISTENING_FOR_DIGITS' || currentRecognitionState === 'NUMBER_COLLECTED_CONFIRMATION') {
+                    // In emergency number input, recognition is started manually
+                    console.log("[SR Debug] Emergency number input recognition ended. Waiting for explicit start.");
+                } else {
+                    // For other states like PROCESSING_GEMINI, recognition is stopped explicitly and then restarted later.
+                    console.log("[SR Debug] Non-IDLE recognition ended. Manual restart expected.");
                 }
             };
         }
 
         // Helper function to start continuous recognition (used after emergency flow ends)
         function startContinuousRecognition() {
-            if (recognition && emergencyCallState === 'IDLE') {
+            if (recognition && currentRecognitionState === 'IDLE') {
                 try {
                     recognition.continuous = true;
                     recognition.interimResults = true;
@@ -767,7 +785,7 @@
 
         // --- Initial App Load Function ---
         async function main() {
-            statusEl.textContent = "🔄 Loading AI model...";
+            statusEl.textContent = "🔄 Loading AI model... SafeVision";
             // Delay to allow browser to prepare SpeechSynthesis voices and potentially satisfy autoplay policy
             await new Promise(resolve => setTimeout(resolve, 500));
 
@@ -795,34 +813,43 @@
             if (!storedEmergencyNumber || storedEmergencyNumber.length !== 10) {
                 // If no valid number stored, prompt for it
                 getUserLocation(); // Get location for potential first SMS
-                startEmergencySMSProcess(true); // True for initial setup
+                await startEmergencySMSProcess(true); // True for initial setup, await to ensure prompt is spoken
+                // fullInfoIntervalId will NOT start here. It starts only after number is confirmed.
             } else {
                 // Number already set, proceed with continuous listening
                 currentEmergencyNumber = storedEmergencyNumber; // Load it into current var
                 startContinuousRecognition(); // Explicitly start continuous listening for commands
-                speak("Welcome back to SafeVision.", 'fullInfo'); // Welcome message for returning users
+                await speak("Welcome back to SafeVision.", 'fullInfo'); // Welcome message for returning users
+                // NEW: Speak full info once immediately after welcome
+                speakFullInformation();
+                // NEW: Start the periodic interval only after welcome and first info is spoken
+                fullInfoIntervalId = setInterval(speakFullInformation, SPEECH_COOLDOWN_FULL_INFO); // Store interval ID
             }
             
-            // Initial full information speech and set up periodic intervals
-            fullInfoIntervalId = setInterval(speakFullInformation, SPEECH_COOLDOWN_FULL_INFO); // Store interval ID
-
             detectFrame(); // Start the continuous object detection loop
         }
 
         // --- Function to combine all displayed info for periodic speech ---
         function speakFullInformation() {
-            const combinedText = `
-                Status: ${statusEl.textContent}.
-                Weather: ${weatherEl.textContent}.
-                Date and Time: ${datetimeEl.textContent}.
-                Object detection: ${objectEl.textContent}.
-                Proximity status: ${proximityStatusEl.textContent}.
-            `.replace(/\s+/g, ' ').trim(); // Clean up extra spaces
+            // Only speak if in IDLE state, to avoid interrupting other processes
+            // AND only if a valid emergency contact number is set
+            if (currentRecognitionState === 'IDLE' && loadEmergencyContact() && loadEmergencyContact().length === 10) {
+                const combinedText = `
+                    Status: ${statusEl.textContent}.
+                    Weather: ${weatherEl.textContent}.
+                    Date and Time: ${datetimeEl.textContent}.
+                    Object detection: ${objectEl.textContent}.
+                    Proximity status: ${proximityStatusEl.textContent}.
+                `.replace(/\s+/g, ' ').trim(); // Clean up extra spaces
 
-            // Only speak if the combined text has changed since the last full info speech
-            if (combinedText !== lastSpokenFullInfo) {
-                 speak(combinedText, 'fullInfo');
-                 lastSpokenFullInfo = combinedText;
+                // Only speak if the combined text has changed since the last full info speech
+                if (combinedText !== lastSpokenFullInfo) {
+                    speak(combinedText, 'fullInfo');
+                    lastSpokenFullInfo = combinedText;
+                }
+            } else {
+                // This is expected behavior if app is busy or no number set
+                console.log("[Full Info] Skipping periodic announcement: App is not in IDLE state or no emergency contact set.");
             }
         }
 
