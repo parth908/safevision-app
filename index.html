@@ -134,34 +134,9 @@
         const PROXIMITY_THRESHOLD_HEIGHT = 450;
 
         // --- Web Speech Recognition API Setup ---
-        // Provides voice-to-text functionality for commands
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
         let recognition; // Instance of SpeechRecognition
-        let currentRecognitionState = 'IDLE'; // 'IDLE', 'PROCESSING_GEMINI', 'LISTENING_FOR_DIGITS', 'NUMBER_COLLECTED_CONFIRMATION'
-        let currentEmergencyNumber = ''; // Stores digits spoken by user for emergency SMS
-        const EMERGENCY_TIMEOUT_MS = 10000; // 10 seconds for user to respond during emergency flow
-        let emergencyTimeoutId; // Timeout ID for emergency response waits
-        let userLocation = null; // Stores approximate user location for inclusion in SMS
-
-        // --- Emergency Contact Persistence ---
-        const EMERGENCY_CONTACT_KEY = 'safevision_emergency_contact';
-
-        /**
-         * Loads the emergency contact number from localStorage.
-         * @returns {string|null} The stored number or null if not found.
-         */
-        function loadEmergencyContact() {
-            return localStorage.getItem(EMERGENCY_CONTACT_KEY);
-        }
-
-        /**
-         * Saves the emergency contact number to localStorage.
-         * @param {string} number The 10-digit number to save.
-         */
-        function saveEmergencyContact(number) {
-            localStorage.setItem(EMERGENCY_CONTACT_KEY, number);
-            console.log("[Emergency Contact] Number saved:", number);
-        }
+        let currentRecognitionState = 'IDLE'; // App will always be in IDLE for general commands
 
         // --- Geolocation (Location Tracking) ---
         /**
@@ -173,15 +148,17 @@
             if (navigator.geolocation) {
                 navigator.geolocation.getCurrentPosition(
                     (position) => {
-                        userLocation = {
+                        // User's location is only stored, not used for 112 calls
+                        // Keeping it here in case it's needed for other features or future changes.
+                        window.userLocation = {
                             latitude: position.coords.latitude,
                             longitude: position.coords.longitude,
                         };
-                        console.log(`[Geolocation] Location obtained: Lat ${userLocation.latitude}, Lon ${userLocation.longitude}`);
+                        console.log(`[Geolocation] Location obtained: Lat ${window.userLocation.latitude}, Lon ${window.userLocation.longitude}`);
                     },
                     (error) => {
                         console.error("[Geolocation] Error getting location:", error);
-                        userLocation = null; // Reset if error
+                        window.userLocation = null; // Reset if error
                         let errorMessage = "Could not get your location.";
                         if (error.code === error.PERMISSION_DENIED) {
                             errorMessage += " Please grant location permission.";
@@ -190,6 +167,7 @@
                         } else if (error.code === error.TIMEOUT) {
                             errorMessage += " The request to get user location timed out.";
                         }
+                        // Speak this error as an emergency type to bypass mute
                         speak(errorMessage, 'emergency');
                     },
                     {
@@ -204,8 +182,8 @@
             }
         }
 
+
         // --- PWA Service Worker Registration ---
-        // Registers the service worker for offline capabilities and PWA features.
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
                 navigator.serviceWorker.register('service-worker.js')
@@ -573,7 +551,7 @@
 
         /**
          * Sets up the Web Speech Recognition API.
-         * Initially for continuous listening, switches to single utterance for digit input.
+         * App is always in continuous listening mode.
          */
         function setupSpeechRecognition() {
             if (!SpeechRecognition) {
@@ -584,7 +562,6 @@
             }
 
             recognition = new SpeechRecognition();
-            // Start in continuous mode for general commands, will switch to false for digit input
             recognition.continuous = true; 
             recognition.interimResults = true; // Get partial results for smoother experience
             recognition.lang = 'en-IN'; // Set recognition language to Indian English
@@ -600,14 +577,8 @@
                     const isFinal = results[i].isFinal;
 
                     // Display interim results in the status bar for immediate feedback
-                    // This applies to both general commands and number input
                     if (!isFinal) {
-                        // For digit input, show the current full number + the interim digit
-                        if (currentRecognitionState === 'LISTENING_FOR_DIGITS' || currentRecognitionState === 'NUMBER_COLLECTED_CONFIRMATION') {
-                            speechRecognitionStatusEl.innerHTML = `<i class="fas fa-microphone"></i> Current: ${currentEmergencyNumber} | Spoken: ${transcript}...`;
-                        } else { // For general commands
-                            speechRecognitionStatusEl.innerHTML = `<i class="fas fa-microphone"></i> Listening: ${transcript}...`;
-                        }
+                        speechRecognitionStatusEl.innerHTML = `<i class="fas fa-microphone"></i> Listening: ${transcript}...`;
                         continue; // Process next result if not final
                     }
 
@@ -615,7 +586,8 @@
                     if (isFinal) {
                         console.log("[SR Debug] Final recognized:", transcript, "State:", currentRecognitionState);
 
-                        if (currentRecognitionState === 'IDLE') {
+                        // Since currentRecognitionState is always 'IDLE' now
+                        if (currentRecognitionState === 'IDLE') { 
                             // --- Mute/Unmute Commands ---
                             if (transcript.includes("mute")) {
                                 isMuted = true;
@@ -636,105 +608,18 @@
                                 getSceneDescriptionFromGemini();
                                 return; // Exit onresult, Gemini process takes over
                             }
-                            // --- Emergency SMS Command ---
+                            // --- Emergency CALL Command to 112 ---
                             if (transcript.includes("emergency")) {
-                                getUserLocation(); // Get location for SMS
-                                const storedNumber = loadEmergencyContact();
-                                if (storedNumber && storedNumber.length === 10) {
-                                    await speak(`Sending emergency SMS to ${storedNumber}.`, 'emergency');
-                                    if(recognition) recognition.stop(); // Stop continuous recognition before opening external app
-                                    setTimeout(() => initiateSMS(storedNumber), 2000); // 2-second delay
-                                } else {
-                                    await speak("Emergency contact number is not set. Please say, change emergency number, to set it.", 'emergency');
-                                }
-                                return; // Exit onresult, new flow might start
-                            }
-                            // --- Change Emergency Number command ---
-                            if (transcript.includes("change emergency number") || transcript.includes("set emergency number")) {
-                                getUserLocation(); // Attempt to get location in case it's needed later
-                                startEmergencySMSProcess(false); // Start the number change flow (not initial setup)
-                                return; // Exit onresult, new flow starts
-                            }
-                        }
-
-                        // --- Emergency SMS Flow Commands (Active only when not IDLE) ---
-                        if (currentRecognitionState === 'LISTENING_FOR_DIGITS') {
-                            // Normalize transcript to find digits more robustly (e.g., "one" to "1")
-                            const normalizedTranscript = transcript
-                                .replace(/zero/g, '0').replace(/one/g, '1').replace(/two/g, '2').replace(/three/g, '3')
-                                .replace(/four/g, '4').replace(/five/g, '5').replace(/six/g, '6').replace(/seven/g, '7')
-                                .replace(/eight/g, '8').replace(/nine/g, '9')
-                                .replace(/\s/g, ''); // Remove spaces if numbers are spoken individually but recognized as a phrase
-                            
-                            // Extract only the first digit recognized, as per "one letter at a time"
-                            const digit = normalizedTranscript.match(/\d/); 
-
-                            if (digit) {
-                                currentEmergencyNumber += digit[0]; // Append only the first digit
-                                console.log("[SR Debug] Current number so far:", currentEmergencyNumber);
+                                await speak(`Making an emergency call to 112.`, 'emergency'); // Speak immediately
+                                if(recognition) recognition.stop(); // Stop continuous recognition before opening external app
                                 
-                                await speak(digit[0], 'emergency'); // NEW: Repeat the single digit back
-
-                                if (currentEmergencyNumber.length < 10) {
-                                    // Remain in LISTENING_FOR_DIGITS, prompt for next digit
-                                    speechRecognitionStatusEl.innerHTML = `Number: ${currentEmergencyNumber} | <i class="fas fa-microphone"></i> Listening for next digit...`;
-                                    // Restart listening for the next single digit
-                                    clearTimeout(emergencyTimeoutId);
-                                    setTimeout(() => { // Delay before restart
-                                        console.log("[SR Debug] Restarting recognition for next digit...");
-                                        recognition.start();
-                                        emergencyTimeoutId = setTimeout(handleEmergencyTimeout, EMERGENCY_TIMEOUT_MS);
-                                    }, 500); // Small delay to prevent microphone from picking up app's own speech
-                                } else {
-                                    currentEmergencyNumber = currentEmergencyNumber.substring(0, 10); // Ensure 10 digits
-                                    await speak(`You said ${currentEmergencyNumber}. Is this correct? Say send to confirm, or correct to re-enter.`, 'emergency');
-                                    currentRecognitionState = 'NUMBER_COLLECTED_CONFIRMATION'; // Change state
-                                    speechRecognitionStatusEl.innerHTML = `Confirm: ${currentEmergencyNumber} | <i class="fas fa-microphone"></i> Listening for confirmation...`;
-                                    clearTimeout(emergencyTimeoutId);
-                                    setTimeout(() => { // Delay before restart
-                                        console.log("[SR Debug] Restarting recognition for confirmation...");
-                                        recognition.start(); // Listen for confirmation phrase
-                                        emergencyTimeoutId = setTimeout(handleEmergencyTimeout, EMERGENCY_TIMEOUT_MS);
-                                    }, 500);
-                                }
-                            } else if (transcript.includes("cancel")) {
-                                await speak("Emergency SMS process cancelled.", 'emergency');
-                                resetEmergencyState();
-                            } else {
-                                await speak("I didn't hear a digit. Please speak one digit at a time.", 'emergency');
-                                speechRecognitionStatusEl.innerHTML = '<i class="fas fa-microphone"></i> Listening for digit...';
-                                clearTimeout(emergencyTimeoutId);
-                                setTimeout(() => { // Delay before restart
-                                    console.log("[SR Debug] Restarting recognition due to no digit detected...");
-                                    recognition.start();
-                                    emergencyTimeoutId = setTimeout(handleEmergencyTimeout, EMERGENCY_TIMEOUT_MS);
-                                }, 500);
-                            }
-                        } else if (currentRecognitionState === 'NUMBER_COLLECTED_CONFIRMATION') {
-                            if (transcript.includes("send") || transcript.includes("yes") || transcript.includes("confirm")) { // Added "confirm"
-                                saveEmergencyContact(currentEmergencyNumber); // Save the confirmed number
-                                await speak("Emergency contact number saved. You are now ready to go.", 'emergency'); // NEW: Confirmation speech
-                                resetEmergencyState(); // Reset state and start periodic updates
-                            } else if (transcript.includes("correct") || transcript.includes("no") || transcript.includes("clear") || transcript.includes("redo")) { // Added "redo"
-                                await speak("Okay, please re-enter the 10-digit number, digit by digit.", 'emergency');
-                                currentEmergencyNumber = '';
-                                currentRecognitionState = 'LISTENING_FOR_DIGITS';
-                                speechRecognitionStatusEl.innerHTML = '<i class="fas fa-microphone"></i> Listening for number...';
-                                clearTimeout(emergencyTimeoutId);
-                                setTimeout(() => { // Delay before restart
-                                    console.log("[SR Debug] Restarting recognition for re-entry...");
-                                    recognition.start();
-                                    emergencyTimeoutId = setTimeout(handleEmergencyTimeout, EMERGENCY_TIMEOUT_MS);
-                                }, 500);
-                            } else {
-                                await speak(`I did not understand your confirmation. Say send or correct.`, 'emergency');
-                                speechRecognitionStatusEl.innerHTML = `Confirm: ${currentEmergencyNumber} | <i class="fas fa-microphone"></i> Listening...`;
-                                clearTimeout(emergencyTimeoutId);
-                                setTimeout(() => { // Delay before restart
-                                    console.log("[SR Debug] Restarting recognition for re-confirmation...");
-                                    recognition.start();
-                                    emergencyTimeoutId = setTimeout(handleEmergencyTimeout, EMERGENCY_TIMEOUT_MS);
-                                }, 500);
+                                // Small delay to let speech finish before initiating call
+                                setTimeout(() => {
+                                    window.location.href = 'tel:112'; // Initiate call
+                                    // After initiating call, resume recognition after a delay
+                                    setTimeout(startContinuousRecognition, 5000); // Give time for call dialog to appear/user to react
+                                }, 1000); 
+                                return; // Exit onresult, new flow might start
                             }
                         }
                     }
@@ -745,32 +630,25 @@
             recognition.onerror = (event) => {
                 console.error("[SR Debug] Speech recognition error:", event.error, event.message);
                 
-                if (currentRecognitionState === 'IDLE') {
-                   if (event.error === 'no-speech') {
-                       console.log("[SR Debug] No speech detected (continuous mode).");
-                   } else if (event.error === 'not-allowed') {
-                       speak("Microphone permission denied. Voice commands are disabled.", 'emergency');
-                       speechRecognitionStatusEl.innerHTML = "❌ Mic permission denied!";
-                       speechRecognitionStatusEl.style.color = 'red';
-                       recognition.continuous = false; // Stop trying to restart if permission denied
-                   } else if (event.error === 'network') {
-                       speak("Voice commands require an internet connection.", 'emergency');
-                       speechRecognitionStatusEl.innerHTML = "🌐 No internet for voice!";
-                       speechRecognitionStatusEl.style.color = 'orange';
-                   } else {
-                       speak("A voice command error occurred. Trying to restart.", 'emergency');
-                       speechRecognitionStatusEl.innerHTML = `⚠️ Voice error: ${event.error}`;
-                       speechRecognitionStatusEl.style.color = 'orange';
-                   }
-                } else { // If in an active emergency flow (number dictation/confirmation)
-                    // Errors during digit dictation should be handled more gracefully, not necessarily reset
-                    speak("An error occurred during voice input. Please try again.", 'emergency');
-                    // Reset to IDLE, which will restart continuous listening for commands
-                    resetEmergencyState(); 
+                if (event.error === 'no-speech') {
+                   console.log("[SR Debug] No speech detected (continuous mode).");
+                } else if (event.error === 'not-allowed') {
+                   speak("Microphone permission denied. Voice commands are disabled.", 'emergency');
+                   speechRecognitionStatusEl.innerHTML = "❌ Mic permission denied!";
+                   speechRecognitionStatusEl.style.color = 'red';
+                   recognition.continuous = false; // Stop trying to restart if permission denied
+                } else if (event.error === 'network') {
+                   speak("Voice commands require an internet connection.", 'emergency');
+                   speechRecognitionStatusEl.innerHTML = "🌐 No internet for voice!";
+                   speechRecognitionStatusEl.style.color = 'orange';
+                } else {
+                   speak("A voice command error occurred. Trying to restart.", 'emergency');
+                   speechRecognitionStatusEl.innerHTML = `⚠️ Voice error: ${event.error}`;
+                   speechRecognitionStatusEl.style.color = 'orange';
                 }
 
                 // Attempt to restart continuous recognition if it was supposed to be running
-                if (currentRecognitionState === 'IDLE' && recognition.continuous && event.error !== 'not-allowed') {
+                if (recognition.continuous && event.error !== 'not-allowed') {
                     console.log("[SR Debug] Attempting to restart continuous recognition after error.");
                     try {
                          recognition.start();
@@ -782,33 +660,24 @@
 
             // Event handler when speech recognition ends
             recognition.onend = () => {
-                if (currentRecognitionState === 'IDLE' && recognition.continuous) {
+                if (recognition.continuous) {
                     console.log("[SR Debug] Continuous recognition ended, restarting...");
                     try {
                         recognition.start(); // Automatically restart to maintain continuous listening
                     } catch (e) {
                         console.warn("[SR Debug] Failed to restart continuous recognition:", e);
                     }
-                } else if (currentRecognitionState === 'LISTENING_FOR_DIGITS' || currentRecognitionState === 'NUMBER_COLLECTED_CONFIRMATION') {
-                    // In emergency number input, recognition.continuous is false, so onend fires after each utterance.
-                    // We explicitly start recognition again in onresult for the next digit/confirmation.
-                    // So, if onend fires here and we are in a number input state, it means the recognition stopped
-                    // and was not re-triggered by a valid input. This implies a timeout or silence,
-                    // which is handled by emergencyTimeoutId. So, no auto-restart here.
-                    console.log("[SR Debug] Emergency number input recognition ended. Awaiting explicit start or timeout.");
                 } else {
-                    // For other states like PROCESSING_GEMINI, recognition is stopped explicitly and then restarted later.
-                    console.log("[SR Debug] Non-IDLE recognition ended. Manual restart expected.");
+                    console.log("[SR Debug] Non-continuous recognition ended. Not auto-restarting.");
                 }
             };
         }
 
         /**
          * Helper function to start continuous recognition (for general commands).
-         * Used after a specific flow (like emergency setup or Gemini description) completes.
          */
         function startContinuousRecognition() {
-            if (recognition && currentRecognitionState === 'IDLE') {
+            if (recognition && currentRecognitionState === 'IDLE') { // currentRecognitionState is always 'IDLE' now
                 try {
                     recognition.continuous = true;
                     recognition.interimResults = true;
@@ -827,115 +696,6 @@
             } else {
                  console.log("[SR Debug] Cannot start continuous recognition. Recognition object not ready or not IDLE state.");
             }
-        }
-
-
-        /**
-         * Initiates the voice-guided emergency SMS process (for setup or actual emergency).
-         * @param {boolean} isInitialSetup True if this is the first time setting the number.
-         */
-        async function startEmergencySMSProcess(isInitialSetup = false) { 
-            console.log("[SR Debug] Entering startEmergencySMSProcess. isInitialSetup:", isInitialSetup);
-            if (!SpeechRecognition) {
-                await speak("Voice commands are not supported in this browser. Please use your phone's messaging app manually.", 'emergency');
-                return;
-            }
-            
-            // Stop current recognition (if active)
-            if (recognition) {
-                console.log("[SR Debug] Stopping current recognition before starting SMS flow.");
-                recognition.stop();
-            }
-            // Set to false for single-phrase listening in emergency flow
-            recognition.continuous = false; 
-            recognition.interimResults = false; // For single-digit input, we want final results more clearly
-
-            // Pause background processes
-            clearInterval(fullInfoIntervalId); 
-            console.log("[SR Debug] Full info speaking paused.");
-
-            currentEmergencyNumber = ''; // Reset the number for new input
-            currentRecognitionState = 'LISTENING_FOR_DIGITS'; // Set state to listen for digits
-
-            if (isInitialSetup) {
-                await speak("Welcome to SafeVision. First, please speak the 10-digit emergency contact number, digit by digit. This number will be saved.", 'emergency');
-            } else {
-                await speak("Please speak the 10-digit phone number, digit by digit.", 'emergency');
-            }
-            
-            // Delay starting recognition until app speech is done
-            setTimeout(() => {
-                speechRecognitionStatusEl.innerHTML = '<i class="fas fa-microphone"></i> Listening for digit...';
-                console.log("[SR Debug] Attempting to start recognition for digit input.");
-                recognition.start(); // Start speech recognition for number input
-                clearTimeout(emergencyTimeoutId); // Clear any previous timeout
-                // Set a timeout for the user's initial response
-                emergencyTimeoutId = setTimeout(() => {
-                    handleEmergencyTimeout();
-                }, EMERGENCY_TIMEOUT_MS);
-            }, 500); // Small delay to let speech finish
-        }
-
-        /**
-         * Handles timeouts during the emergency SMS process.
-         */
-        function handleEmergencyTimeout() {
-            recognition.stop(); // Stop recognition
-            speak("No response. Emergency process cancelled.", 'emergency');
-            resetEmergencyState(); // Reset emergency state
-            console.log("[SR Debug] Emergency process timed out.");
-        }
-
-        /**
-         * Resets the app state after emergency flow or errors.
-         */
-        function resetEmergencyState() {
-            console.log("[SR Debug] Entering resetEmergencyState.");
-            currentRecognitionState = 'IDLE';
-            currentEmergencyNumber = '';
-            // Only update status bar if not during the initial setup/number collection phase.
-            // When going back to IDLE, the continuous listener will set the appropriate status.
-            speechRecognitionStatusEl.innerHTML = '<i class="fas fa-microphone"></i> Listening for commands...'; 
-            clearTimeout(emergencyTimeoutId); // Clear any pending timeout
-            // Don't stop recognition here, startContinuousRecognition will handle it
-            console.log("[SR Debug] Emergency state reset to IDLE. Checking to resume full info and continuous recognition.");
-            
-            // Resume periodic full info interval IF emergency contact is valid
-            const currentContact = loadEmergencyContact();
-            if (currentContact && currentContact.length === 10) {
-                clearInterval(fullInfoIntervalId); // Clear any old one just in case
-                fullInfoIntervalId = setInterval(speakFullInformation, SPEECH_COOLDOWN_FULL_INFO);
-                console.log("[SR Debug] Full info speaking resumed.");
-            } else {
-                // If no valid number, ensure periodic speaking remains off
-                clearInterval(fullInfoIntervalId);
-                console.log("[SR Debug] Full info speaking remains paused as no emergency contact set.");
-            }
-            startContinuousRecognition(); // Ensure continuous listening for commands resumes
-        }
-
-        /**
-         * Opens the device's default messaging app with a pre-filled SMS.
-         * Note: Cannot send SMS directly; user must tap "Send" in the app.
-         * @param {string} phoneNumber The recipient's 10-digit phone number.
-         */
-        async function initiateSMS(phoneNumber) {
-            let message = "Emergency! I need assistance.";
-            // Add approximate location to message if available
-            if (userLocation) {
-                message += ` My approximate location is https://maps.google.com/?q=${userLocation.latitude},${userLocation.longitude}`;
-            }
-
-            // Construct the SMS URL using 'sms:' URI scheme
-            const smsUrl = `sms:${phoneNumber}?body=${encodeURIComponent(message)}`;
-            window.location.href = smsUrl; // Redirect to open the messaging app
-
-            // Inform the user about the manual sending step
-            await speak("Opening your messaging app to send the SMS. Please review the message and tap send.", 'emergency');
-            console.log("[SMS Debug] SMS URL generated:", smsUrl);
-
-            // After initiating SMS, restart continuous listening after a short delay
-            setTimeout(startContinuousRecognition, 5000); // Give time for messaging app to open/user to react
         }
 
 
@@ -982,27 +742,14 @@
                 console.log("[Main] AI model loaded. Initializing speech recognition.");
 
                 setupSpeechRecognition(); // Initialize speech recognition object
+                startContinuousRecognition(); // Start continuous listening for commands immediately
+                getUserLocation(); // Attempt to get user's location (optional, for future features)
 
-                // Check for existing emergency contact on first load - THIS IS THE CRITICAL FIRST CHECK
-                const storedEmergencyNumber = loadEmergencyContact();
-                if (!storedEmergencyNumber || storedEmergencyNumber.length !== 10) {
-                    // PRIORITY 1: No valid emergency number found, START SETUP IMMEDIATELY and await its completion.
-                    console.log("[Main] No valid emergency number found. Starting setup process.");
-                    getUserLocation(); // Get location for potential first SMS
-                    await startEmergencySMSProcess(true); // True for initial setup. AWAIT this.
-                    // After startEmergencySMSProcess completes (i.e., number is set or cancelled/timed out),
-                    // it will call resetEmergencyState, which starts continuous recognition and periodic announcements.
-                    // So, no further action needed here IF setup completed successfully.
-                } else {
-                    // Number already set, proceed with normal operation
-                    currentEmergencyNumber = storedEmergencyNumber;
-                    console.log("[Main] Emergency number found: " + storedEmergencyNumber);
-                    startContinuousRecognition(); // Resume listening for commands
-                    await speak("Welcome back to SafeVision.", 'fullInfo'); // Speak welcome message
-                    speakFullInformation(); // Speak full info once immediately
-                    fullInfoIntervalId = setInterval(speakFullInformation, SPEECH_COOLDOWN_FULL_INFO); // Start periodic interval
-                    console.log("[Main] Periodic full information speaking started.");
-                }
+                // App starts immediately with welcome and periodic info, no emergency number setup
+                await speak("Welcome to SafeVision.", 'fullInfo'); 
+                speakFullInformation(); // Speak full info once immediately
+                fullInfoIntervalId = setInterval(speakFullInformation, SPEECH_COOLDOWN_FULL_INFO); // Start periodic interval
+                console.log("[Main] Periodic full information speaking started.");
             } // End of startAppLogicFlow
             
             detectFrame(); // Start the continuous object detection loop
