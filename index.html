@@ -514,13 +514,9 @@
                 setTimeout(() => {
                     currentRecognitionState = 'IDLE';
                     startContinuousRecognition();
-                    // Only resume full info speaking if emergency contact is valid
-                    if (loadEmergencyContact() && loadEmergencyContact().length === 10) {
-                        fullInfoIntervalId = setInterval(speakFullInformation, SPEECH_COOLDOWN_FULL_INFO);
-                        console.log("[SR Debug] Full info speaking resumed after Gemini.");
-                    } else {
-                        console.log("[SR Debug] Full info speaking remains paused as no emergency contact set.");
-                    }
+                    // Always resume full info speaking
+                    fullInfoIntervalId = setInterval(speakFullInformation, SPEECH_COOLDOWN_FULL_INFO);
+                    console.log("[SR Debug] Full info speaking resumed after Gemini.");
                 }, 1000); // 1-second delay
             }
         }
@@ -857,13 +853,9 @@
             // Don't stop recognition here, startContinuousRecognition will handle it
             console.log("[SR Debug] Emergency state reset to IDLE. Checking to resume full info and continuous recognition.");
             
-            // Resume the periodic full info interval IF emergency contact is valid
-            if (loadEmergencyContact() && loadEmergencyContact().length === 10) {
-                fullInfoIntervalId = setInterval(speakFullInformation, SPEECH_COOLDOWN_FULL_INFO);
-                console.log("[SR Debug] Full info speaking resumed.");
-            } else {
-                console.log("[SR Debug] Full info speaking remains paused as no emergency contact set.");
-            }
+            // Resume the periodic full info interval
+            fullInfoIntervalId = setInterval(speakFullInformation, SPEECH_COOLDOWN_FULL_INFO);
+            console.log("[SR Debug] Full info speaking resumed.");
             startContinuousRecognition(); // Ensure continuous listening for commands resumes
         }
 
@@ -898,45 +890,64 @@
             // Delay to allow browser to prepare SpeechSynthesis voices and potentially satisfy autoplay policy
             await new Promise(resolve => setTimeout(resolve, 500));
 
-            // Set up listener for when voices are loaded/changed
-            speechSynthesis.onvoiceschanged = () => {
-                console.log("[TTS Debug] Voices loaded event fired. Voices:", speechSynthesis.getVoices().map(v => v.name));
-            };
-            // Call getVoices immediately to populate the list if they're already ready
-            speechSynthesis.getVoices();
-
-            await setupCamera(); // Set up camera
-            if (!video.srcObject) { // If camera setup fails, stop main execution
-                console.error("Camera setup failed, aborting main execution.");
-                return;
-            }
-
-            // Load the COCO-SSD AI model (lite_mobilenet_v2 for performance)
-            model = await cocoSsd.load({base: 'lite_mobilenet_v2'});
-            statusEl.textContent = "✅ AI model loaded!";
-            console.log("[Main] AI model loaded. Initializing speech recognition.");
-
-            setupSpeechRecognition(); // Initialize speech recognition object
-
-            // Check for existing emergency contact on first load
-            const storedEmergencyNumber = loadEmergencyContact();
-            if (!storedEmergencyNumber || storedEmergencyNumber.length !== 10) {
-                // If no valid number stored, prompt for it
-                console.log("[Main] No valid emergency number found. Starting setup process.");
-                getUserLocation(); // Get location for potential first SMS
-                await startEmergencySMSProcess(true); // True for initial setup, await to ensure prompt is spoken
-                // fullInfoIntervalId will NOT start here. It starts only after number is confirmed.
+            // Check if voices are available immediately.
+            const initialVoices = speechSynthesis.getVoices();
+            if (initialVoices.length === 0) {
+                console.warn("[Main] No voices available initially. Setting up voiceschanged listener.");
+                statusEl.textContent = "❌ Speech not ready. No voices.";
+                statusEl.style.color = 'red';
+                // Set up listener for when voices are loaded/changed
+                speechSynthesis.onvoiceschanged = () => {
+                    console.log("[TTS Debug] Voices loaded event fired. Voices:", speechSynthesis.getVoices().map(v => v.name));
+                    // Attempt to speak the initial prompt IF we were waiting for voices
+                    if (statusEl.textContent.includes("Speech not ready")) {
+                        statusEl.textContent = "✅ Voices loaded!";
+                        statusEl.style.color = '';
+                        // Re-trigger the initial flow now that voices are available
+                        startCoreAppFeatures();
+                    }
+                };
             } else {
-                // Number already set, proceed with continuous listening
-                currentEmergencyNumber = storedEmergencyNumber; // Load it into current var
-                console.log("[Main] Emergency number found. Starting continuous recognition and welcome message.");
-                startContinuousRecognition(); // Explicitly start continuous listening for commands
-                await speak("Welcome back to SafeVision.", 'fullInfo'); // Welcome message for returning users
-                // Speak full info once immediately after welcome
-                speakFullInformation();
-                // Start the periodic interval only after welcome and first info is spoken
-                fullInfoIntervalId = setInterval(speakFullInformation, SPEECH_COOLDOWN_FULL_INFO); // Store interval ID
+                console.log("[Main] Voices available immediately:", initialVoices.map(v => v.name));
+                // Proceed directly if voices are already there
+                startCoreAppFeatures();
             }
+
+
+            async function startCoreAppFeatures() {
+                await setupCamera(); // Set up camera
+                if (!video.srcObject) { // If camera setup fails, stop main execution
+                    console.error("Camera setup failed, aborting main execution.");
+                    return;
+                }
+
+                // Load the COCO-SSD AI model (lite_mobilenet_v2 for performance)
+                model = await cocoSsd.load({base: 'lite_mobilenet_v2'});
+                statusEl.textContent = "✅ AI model loaded!";
+                console.log("[Main] AI model loaded. Initializing speech recognition.");
+
+                setupSpeechRecognition(); // Initialize speech recognition object
+                startContinuousRecognition(); // Start continuous listening for commands immediately
+
+                // Start speaking welcome and periodic info immediately
+                await speak("Welcome to SafeVision.", 'fullInfo'); 
+                speakFullInformation(); // Speak full info once immediately after welcome
+                fullInfoIntervalId = setInterval(speakFullInformation, SPEECH_COOLDOWN_FULL_INFO); // Start periodic interval
+                console.log("[Main] Periodic full information speaking started.");
+
+                // Check emergency contact only after core app features are running and speaking
+                const storedEmergencyNumber = loadEmergencyContact();
+                if (!storedEmergencyNumber || storedEmergencyNumber.length !== 10) {
+                    console.log("[Main] No valid emergency number found. Prompting user for setup.");
+                    getUserLocation(); // Get location for potential first SMS
+                    // Initial speak to prompt for number. Await ensures it finishes before mic starts.
+                    // This call will temporarily pause periodic announcements.
+                    await startEmergencySMSProcess(true); 
+                } else {
+                    currentEmergencyNumber = storedEmergencyNumber; // Load it into current var
+                    console.log("[Main] Emergency number found: " + storedEmergencyNumber);
+                }
+            } // End of startCoreAppFeatures
             
             detectFrame(); // Start the continuous object detection loop
         }
@@ -944,8 +955,7 @@
         // --- Function to combine all displayed info for periodic speech ---
         function speakFullInformation() {
             // Only speak if in IDLE state, to avoid interrupting other processes
-            // AND only if a valid emergency contact number is set
-            if (currentRecognitionState === 'IDLE' && loadEmergencyContact() && loadEmergencyContact().length === 10) {
+            if (currentRecognitionState === 'IDLE') {
                 const combinedText = `
                     Status: ${statusEl.textContent}.
                     Weather: ${weatherEl.textContent}.
@@ -960,8 +970,8 @@
                     lastSpokenFullInfo = combinedText;
                 }
             } else {
-                // This is expected behavior if app is busy or no number set
-                console.log("[Full Info] Skipping periodic announcement: App is not in IDLE state or no emergency contact set.");
+                // This is expected behavior if app is busy
+                console.log("[Full Info] Skipping periodic announcement: App is not in IDLE state.");
             }
         }
 
