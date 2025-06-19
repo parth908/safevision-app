@@ -1,7 +1,7 @@
 {
   "name": "SafeVision App",
   "short_name": "SafeVision",
-  "description": "An assistive app for real-time person detection and scene description.",
+  "description": "An assistive app for real-time person detection.",
   "start_url": "./",
   "display": "fullscreen",
   "background_color": "#000000",
