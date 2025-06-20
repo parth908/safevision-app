@@ -8,7 +8,6 @@
     <meta name="theme-color" content="#000000">
     <link rel="apple-touch-icon" href="icon-192.png">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
-
     <style>
         html, body {
             margin: 0;
@@ -66,47 +65,20 @@
             50% { transform: scale(1.1); opacity: 0.8; }
             100% { transform: scale(1); opacity: 1; }
         }
-        #callSimulationOverlay {
-            display: none;
-            position: fixed;
-            top: 0; left: 0;
-            width: 100vw; height: 100vh;
-            background-color: rgba(0,0,0,0.98);
-            justify-content: center;
-            align-items: center;
-            z-index: 9999;
-            cursor: pointer;
-        }
-        #callScreenshot {
-            width: 100vw; height: 100vh;
-            object-fit: cover;
-            border-radius: 0;
-            box-shadow: none;
-            display: block;
-        }
-        .hide-during-simulation {
-            display: block;
-        }
-        .hidden {
-            display: none !important;
-        }
     </style>
 </head>
 <body>
-    <video id="video" class="hide-during-simulation" autoplay playsinline muted></video>
-    <canvas id="canvas" class="hide-during-simulation"></canvas>
-    <div id="info" class="hide-during-simulation">
+    <video id="video" autoplay playsinline muted></video>
+    <canvas id="canvas"></canvas>
+    <div id="info">
         <div id="status">🔄 Loading AI model...</div>
         <div id="weather">🌡️ Temp: 35°C | 🌬️ Wind: 15 km/h | Sunny</div> 
         <div id="datetime"></div>
         <div id="object">👁️ Waiting for detection...</div>
         <div id="proximityStatus" style="color: limegreen;">🟢 No person detected</div>
     </div>
-    <div id="speechRecognitionStatus" class="hide-during-simulation">
+    <div id="speechRecognitionStatus">
         <i class="fas fa-microphone"></i> Listening for commands...
-    </div>
-    <div id="callSimulationOverlay">
-        <img id="callScreenshot" src="call-112-screenshot.png" alt="Emergency Call Simulation">
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0"></script>
@@ -122,9 +94,6 @@
         const objectEl = document.getElementById("object");
         const proximityStatusEl = document.getElementById("proximityStatus");
         const speechRecognitionStatusEl = document.getElementById("speechRecognitionStatus");
-        const callSimulationOverlay = document.getElementById('callSimulationOverlay');
-        const callScreenshot = document.getElementById('callScreenshot');
-        const hideDuringSimulationEls = document.querySelectorAll('.hide-during-simulation');
 
         // --- Variables ---
         let model, recognition, fullInfoIntervalId, currentRecognitionState = 'IDLE';
@@ -132,7 +101,6 @@
         let lastSpokenFullInfo = "";
         const SPEECH_COOLDOWN_FULL_INFO = 60000, SPEECH_COOLDOWN_WARNING = 3000;
         let lastFullInfoSpeechTime = 0, lastWarningSpeechTime = 0;
-        const CALL_SIMULATION_DURATION = 3000;
 
         // --- Service Worker ---
         if ('serviceWorker' in navigator) {
@@ -154,23 +122,7 @@
                 const stream = await navigator.mediaDevices.getUserMedia({
                     video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 480 } },
                     audio: false
-                });
-                video.srcObject = stream;
-                return new Promise(resolve => {
-                    video.onloadedmetadata = () => {
-                        video.play();
-                        resizeCanvas();
-                        resolve(video);
-                    };
-                });
-            } catch (error) {
-                statusEl.textContent = "❌ Camera access denied or not available.";
-                statusEl.style.color = 'red';
-                return null;
-            }
-        }
-        function resizeCanvas() {
-            canvas.width = video.videoWidth;
+                video.videoWidth;
             canvas.height = video.videoHeight;
         }
 
@@ -297,15 +249,14 @@
                         }
                         // EMERGENCY!
                         if (transcript.includes("emergency")) {
-                            await speak("Initiating simulated emergency call.", 'emergency');
-                            showCallSimulation();
+                            await speak("Calling emergency services at 112.", 'emergency');
                             return;
                         }
                     }
                 }
             };
             recognition.onend = () => {
-                if (recognition && recognition.continuous && !callSimulationOverlay.classList.contains('shown')) {
+                if (recognition && recognition.continuous) {
                     try { recognition.start(); } catch {}
                 }
             };
@@ -320,30 +271,6 @@
                 } catch {}
             }
         }
-
-        // --- Emergency Call Simulation ---
-        function showCallSimulation() {
-            // Hide all UI overlays
-            hideDuringSimulationEls.forEach(el => el.classList.add('hidden'));
-            callSimulationOverlay.style.display = 'flex';
-            callSimulationOverlay.classList.add('shown');
-            // Pause periodic info
-            clearInterval(fullInfoIntervalId);
-            // Cancel ongoing speech and recognition
-            if (recognition) recognition.stop();
-            speechSynthesis.cancel();
-        }
-        function hideCallSimulation() {
-            callSimulationOverlay.style.display = 'none';
-            callSimulationOverlay.classList.remove('shown');
-            // Show all UI overlays
-            hideDuringSimulationEls.forEach(el => el.classList.remove('hidden'));
-            // Resume recognition and info speaking
-            startContinuousRecognition();
-            clearInterval(fullInfoIntervalId);
-            fullInfoIntervalId = setInterval(speakFullInformation, SPEECH_COOLDOWN_FULL_INFO);
-        }
-        callSimulationOverlay.addEventListener('click', hideCallSimulation);
 
         // --- Main App ---
         async function main() {
