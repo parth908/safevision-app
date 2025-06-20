@@ -4,10 +4,12 @@
     <meta charset="UTF-8" />
     <title>SafeVision</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <!-- Manifest for PWA features -->
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#000000">
     <link rel="apple-touch-icon" href="icon-192.png">
 
+    <!-- Font Awesome for Icons (Microphone for listening status) -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
 
     <style>
@@ -78,14 +80,14 @@
 
         /* Styles for the call simulation screenshot overlay */
         #callSimulationOverlay {
-            display: none; /* Hidden by default */
+            display: none !important; /* IMPORTANT: Ensures it's hidden by default and only shown by JS */
             position: fixed;
             top: 0;
             left: 0;
             width: 100vw;
             height: 100vh;
             background-color: rgba(0, 0, 0, 0.9); /* Semi-transparent black background */
-            display: flex;
+            display: flex; /* Will be set to 'flex' by JS when visible */
             justify-content: center;
             align-items: center;
             z-index: 1000; /* Ensure it's on top of everything */
@@ -93,11 +95,12 @@
         }
 
         #callScreenshot {
-            max-width: 90%; /* Responsive width */
-            max-height: 90%; /* Responsive height */
-            object-fit: contain; /* Ensures the whole image is visible */
-            border-radius: 15px; /* Rounded corners for the screenshot */
-            box-shadow: 0 0 20px rgba(0, 255, 0, 0.5); /* Green glow effect */
+            width: 100%; /* Make image fill the width of its container */
+            height: 100%; /* Make image fill the height of its container */
+            object-fit: cover; /* Crop if necessary to cover the entire container */
+            /* border-radius and box-shadow removed if we want truly fullscreen */
+            border-radius: 0; /* No rounded corners for true fullscreen */
+            box-shadow: none; /* No shadow for true fullscreen */
         }
     </style>
 </head>
@@ -115,7 +118,9 @@
         <i class="fas fa-microphone"></i> Listening for commands...
     </div>
 
+    <!-- Call Simulation Overlay -->
     <div id="callSimulationOverlay">
+        <!-- IMPORTANT: Ensure 'call-112-screenshot.png' is uploaded to your GitHub repo's root directory -->
         <img id="callScreenshot" src="call-112-screenshot.png" alt="Emergency Call Simulation">
     </div>
 
@@ -599,6 +604,8 @@
                                 if(recognition) recognition.stop();
                                 // Pause periodic information announcements
                                 clearInterval(fullInfoIntervalId);
+                                // Ensure any existing speech is cancelled immediately
+                                speechSynthesis.cancel(); 
 
                                 // Show the call simulation screenshot after a small delay to let speech begin
                                 setTimeout(() => {
