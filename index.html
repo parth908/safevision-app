@@ -4,12 +4,10 @@
     <meta charset="UTF-8" />
     <title>SafeVision</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-    <!-- Manifest for PWA features -->
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#000000">
     <link rel="apple-touch-icon" href="icon-192.png">
 
-    <!-- Font Awesome for Icons (Microphone for listening status) -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
 
     <style>
@@ -77,6 +75,30 @@
             50% { transform: scale(1.1); opacity: 0.8; }
             100% { transform: scale(1); opacity: 1; }
         }
+
+        /* Styles for the call simulation screenshot overlay */
+        #callSimulationOverlay {
+            display: none; /* Hidden by default */
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background-color: rgba(0, 0, 0, 0.9); /* Semi-transparent black background */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000; /* Ensure it's on top of everything */
+            cursor: pointer; /* Indicates it's clickable */
+        }
+
+        #callScreenshot {
+            max-width: 90%; /* Responsive width */
+            max-height: 90%; /* Responsive height */
+            object-fit: contain; /* Ensures the whole image is visible */
+            border-radius: 15px; /* Rounded corners for the screenshot */
+            box-shadow: 0 0 20px rgba(0, 255, 0, 0.5); /* Green glow effect */
+        }
     </style>
 </head>
 <body>
@@ -84,18 +106,19 @@
     <canvas id="canvas"></canvas>
     <div id="info">
         <div id="status">🔄 Loading AI model...</div>
-        <div id="weather">🌡️ Temp: 35°C | 🌬️ Wind: 15 km/h | Sunny</div> <!-- Static weather display -->
-        <div id="datetime"></div>
+        <div id="weather">🌡️ Temp: 35°C | 🌬️ Wind: 15 km/h | Sunny</div> <div id="datetime"></div>
         <div id="object">👁️ Waiting for detection...</div>
         <div id="proximityStatus" style="color: limegreen;">🟢 No person detected</div>
     </div>
 
-    <!-- Speech Recognition Status Display - Always visible for continuous listening -->
     <div id="speechRecognitionStatus">
         <i class="fas fa-microphone"></i> Listening for commands...
     </div>
 
-    <!-- TensorFlow.js and COCO-SSD Model Libraries from CDN -->
+    <div id="callSimulationOverlay">
+        <img id="callScreenshot" src="call-112-screenshot.png" alt="Emergency Call Simulation">
+    </div>
+
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
 
@@ -110,6 +133,8 @@
         const objectEl = document.getElementById("object");
         const proximityStatusEl = document.getElementById("proximityStatus");
         const speechRecognitionStatusEl = document.getElementById("speechRecognitionStatus");
+        const callSimulationOverlay = document.getElementById('callSimulationOverlay');
+        const callScreenshot = document.getElementById('callScreenshot');
 
         // --- Global Variables for AI Model and Speech ---
         let model;
@@ -123,6 +148,8 @@
         let lastFullInfoSpeechTime = 0; // Timestamp of last full info speech
         let lastWarningSpeechTime = 0; // Timestamp of last warning speech
         let fullInfoIntervalId; // Store ID for periodic full info speaking interval
+        let callSimulationTimeoutId; // Timeout ID for the call simulation
+        const CALL_SIMULATION_DURATION = 3000; // 3 seconds for screenshot display
 
         // --- Performance Optimization Variables ---
         let frameCount = 0;
@@ -137,51 +164,6 @@
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
         let recognition; // Instance of SpeechRecognition
         let currentRecognitionState = 'IDLE'; // App will always be in IDLE for general commands
-
-        // --- Geolocation (Location Tracking) ---
-        /**
-         * Attempts to get the user's current geographical location.
-         * Stores the location in `userLocation` global variable.
-         */
-        function getUserLocation() {
-            console.log("[Geolocation] Attempting to get user location...");
-            if (navigator.geolocation) {
-                navigator.geolocation.getCurrentPosition(
-                    (position) => {
-                        // User's location is only stored, not used for 112 calls
-                        // Keeping it here in case it's needed for other features or future changes.
-                        window.userLocation = {
-                            latitude: position.coords.latitude,
-                            longitude: position.coords.longitude,
-                        };
-                        console.log(`[Geolocation] Location obtained: Lat ${window.userLocation.latitude}, Lon ${window.userLocation.longitude}`);
-                    },
-                    (error) => {
-                        console.error("[Geolocation] Error getting location:", error);
-                        window.userLocation = null; // Reset if error
-                        let errorMessage = "Could not get your location.";
-                        if (error.code === error.PERMISSION_DENIED) {
-                            errorMessage += " Please grant location permission.";
-                        } else if (error.code === error.POSITION_UNAVAILABLE) {
-                            errorMessage += " Location information is unavailable.";
-                        } else if (error.code === error.TIMEOUT) {
-                            errorMessage += " The request to get user location timed out.";
-                        }
-                        // Speak this error as an emergency type to bypass mute
-                        speak(errorMessage, 'emergency');
-                    },
-                    {
-                        enableHighAccuracy: true, // Request high accuracy
-                        timeout: 5000, // Timeout after 5 seconds
-                        maximumAge: 0 // Don't use a cached position
-                    }
-                );
-            } else {
-                console.warn("[Geolocation] Geolocation is not supported by this browser.");
-                speak("Location services are not supported by your browser.", 'emergency');
-            }
-        }
-
 
         // --- PWA Service Worker Registration ---
         if ('serviceWorker' in navigator) {
@@ -608,18 +590,22 @@
                                 getSceneDescriptionFromGemini();
                                 return; // Exit onresult, Gemini process takes over
                             }
-                            // --- Emergency CALL Command to 112 ---
+                            // --- Emergency Call Simulation and Instruction ---
                             if (transcript.includes("emergency")) {
-                                await speak(`Making an emergency call to 112.`, 'emergency'); // Speak immediately
-                                if(recognition) recognition.stop(); // Stop continuous recognition before opening external app
+                                // Speak the combined instruction and simulation message
+                                await speak(`Initiating simulated emergency call. For an actual direct emergency call, quickly press your phone's power button five times.`, 'emergency');
                                 
-                                // Small delay to let speech finish before initiating call
+                                // Stop current speech recognition temporarily
+                                if(recognition) recognition.stop();
+                                // Pause periodic information announcements
+                                clearInterval(fullInfoIntervalId);
+
+                                // Show the call simulation screenshot after a small delay to let speech begin
                                 setTimeout(() => {
-                                    window.location.href = 'tel:112'; // Initiate call
-                                    // After initiating call, resume recognition after a delay
-                                    setTimeout(startContinuousRecognition, 5000); // Give time for call dialog to appear/user to react
-                                }, 1000); 
-                                return; // Exit onresult, new flow might start
+                                    showCallSimulation();
+                                }, 500); // 0.5 second delay
+
+                                return; // Exit onresult
                             }
                         }
                     }
@@ -698,6 +684,35 @@
             }
         }
 
+        // --- Call Simulation Functions ---
+        /**
+         * Shows the call simulation screenshot and sets a timeout to hide it.
+         */
+        function showCallSimulation() {
+            callSimulationOverlay.style.display = 'flex'; // Make overlay visible
+            // Set timeout to automatically hide the simulation
+            callSimulationTimeoutId = setTimeout(hideCallSimulation, CALL_SIMULATION_DURATION);
+            console.log(`[Simulation] Call simulation started for ${CALL_SIMULATION_DURATION / 1000} seconds.`);
+        }
+
+        /**
+         * Hides the call simulation screenshot and resumes normal app operations.
+         */
+        function hideCallSimulation() {
+            clearTimeout(callSimulationTimeoutId); // Clear any pending automatic hide
+            callSimulationOverlay.style.display = 'none'; // Hide the overlay
+            console.log("[Simulation] Call simulation ended.");
+            
+            // Resume main app functionalities
+            startContinuousRecognition(); // Resume speech recognition
+            clearInterval(fullInfoIntervalId); // Clear old interval if it's running
+            fullInfoIntervalId = setInterval(speakFullInformation, SPEECH_COOLDOWN_FULL_INFO); // Start periodic info speaking
+            console.log("[Simulation] App functionalities resumed.");
+        }
+
+        // Add event listener to the overlay to hide it on any tap/click
+        callSimulationOverlay.addEventListener('click', hideCallSimulation);
+
 
         // --- Initial App Load Function ---
         async function main() {
@@ -743,8 +758,7 @@
 
                 setupSpeechRecognition(); // Initialize speech recognition object
                 startContinuousRecognition(); // Start continuous listening for commands immediately
-                getUserLocation(); // Attempt to get user's location (optional, for future features)
-
+                
                 // App starts immediately with welcome and periodic info, no emergency number setup
                 await speak("Welcome to SafeVision.", 'fullInfo'); 
                 speakFullInformation(); // Speak full info once immediately
