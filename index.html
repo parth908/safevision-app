@@ -4,131 +4,115 @@
     <meta charset="UTF-8" />
     <title>SafeVision</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-    <!-- Manifest for PWA features -->
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#000000">
     <link rel="apple-touch-icon" href="icon-192.png">
-
-    <!-- Font Awesome for Icons (Microphone for listening status) -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
 
     <style>
-        /* Base styles for the body to cover the entire viewport */
-        body {
+        html, body {
             margin: 0;
+            padding: 0;
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+        }
+        body {
             font-family: sans-serif;
             background-color: #000;
             color: #fff;
-            overflow: hidden; /* Prevent scrolling */
+            width: 100vw;
+            height: 100vh;
             display: flex;
             justify-content: center;
             align-items: center;
-            height: 100vh; /* Full viewport height */
-            width: 100vw;  /* Full viewport width */
+            position: relative;
         }
-        /* Video and Canvas elements to cover the entire screen */
         video, canvas {
             position: absolute;
-            top: 0;
-            left: 0;
-            width: 100vw;
-            height: 100vh;
-            object-fit: cover; /* Ensures video fills screen, may crop if aspect ratios differ */
-            z-index: 0; /* Behind other UI elements */
+            top: 0; left: 0;
+            width: 100vw; height: 100vh;
+            object-fit: cover;
+            z-index: 0;
         }
-        /* Information overlay for status, weather, datetime, object detection */
         #info {
             position: absolute;
-            top: 10px;
-            left: 10px;
-            text-align: left;
-            background-color: rgba(0, 0, 0, 0.7); /* Semi-transparent black background */
+            top: 10px; left: 10px;
+            background-color: rgba(0, 0, 0, 0.7);
             padding: 10px;
             border-radius: 8px;
-            z-index: 2; /* Above video/canvas */
-            font-size: 0.9em; /* Slightly smaller font for info block */
+            z-index: 2;
+            font-size: 0.9em;
         }
-        /* Styling for warning text (e.g., "Person is very close") */
-        .warning-text {
-            color: red;
-            font-weight: bold;
-        }
-        /* Status display for speech recognition (e.g., "Listening...") */
+        .warning-text { color: red; font-weight: bold; }
         #speechRecognitionStatus {
             position: absolute;
-            top: 10px;
-            right: 10px;
-            background-color: rgba(0, 0, 0, 0.7);
+            top: 10px; right: 10px;
+            background-color: rgba(0,0,0,0.7);
             padding: 8px 12px;
             border-radius: 8px;
-            color: yellow; /* Yellow text for "listening" status */
+            color: yellow;
             font-size: 0.9em;
-            display: flex; /* Always display for continuous listening indicator */
+            display: flex;
             align-items: center;
             gap: 5px;
             z-index: 3;
         }
         #speechRecognitionStatus .fas {
-            animation: pulse 1.5s infinite; /* Simple pulsing animation for mic */
+            animation: pulse 1.5s infinite;
         }
-
         @keyframes pulse {
             0% { transform: scale(1); opacity: 1; }
             50% { transform: scale(1.1); opacity: 0.8; }
             100% { transform: scale(1); opacity: 1; }
         }
-
-        /* Styles for the call simulation screenshot overlay */
         #callSimulationOverlay {
-            display: none !important; /* IMPORTANT: Ensures it's hidden by default and only shown by JS */
+            display: none;
             position: fixed;
-            top: 0;
-            left: 0;
-            width: 100vw;
-            height: 100vh;
-            background-color: rgba(0, 0, 0, 0.9); /* Semi-transparent black background */
-            display: flex; /* Will be set to 'flex' by JS when visible */
+            top: 0; left: 0;
+            width: 100vw; height: 100vh;
+            background-color: rgba(0,0,0,0.98);
             justify-content: center;
             align-items: center;
-            z-index: 1000; /* Ensure it's on top of everything */
-            cursor: pointer; /* Indicates it's clickable */
+            z-index: 9999;
+            cursor: pointer;
         }
-
         #callScreenshot {
-            width: 100%; /* Make image fill the width of its container */
-            height: 100%; /* Make image fill the height of its container */
-            object-fit: cover; /* Crop if necessary to cover the entire container */
-            /* border-radius and box-shadow removed if we want truly fullscreen */
-            border-radius: 0; /* No rounded corners for true fullscreen */
-            box-shadow: none; /* No shadow for true fullscreen */
+            width: 100vw; height: 100vh;
+            object-fit: cover;
+            border-radius: 0;
+            box-shadow: none;
+            display: block;
+        }
+        .hide-during-simulation {
+            display: block;
+        }
+        .hidden {
+            display: none !important;
         }
     </style>
 </head>
 <body>
-    <video id="video" autoplay playsinline muted></video>
-    <canvas id="canvas"></canvas>
-    <div id="info">
+    <video id="video" class="hide-during-simulation" autoplay playsinline muted></video>
+    <canvas id="canvas" class="hide-during-simulation"></canvas>
+    <div id="info" class="hide-during-simulation">
         <div id="status">🔄 Loading AI model...</div>
-        <div id="weather">🌡️ Temp: 35°C | 🌬️ Wind: 15 km/h | Sunny</div> <div id="datetime"></div>
+        <div id="weather">🌡️ Temp: 35°C | 🌬️ Wind: 15 km/h | Sunny</div> 
+        <div id="datetime"></div>
         <div id="object">👁️ Waiting for detection...</div>
         <div id="proximityStatus" style="color: limegreen;">🟢 No person detected</div>
     </div>
-
-    <div id="speechRecognitionStatus">
+    <div id="speechRecognitionStatus" class="hide-during-simulation">
         <i class="fas fa-microphone"></i> Listening for commands...
     </div>
-
-    <!-- Call Simulation Overlay -->
     <div id="callSimulationOverlay">
-        <!-- IMPORTANT: Ensure 'call-112-screenshot.png' is uploaded to your GitHub repo's root directory -->
         <img id="callScreenshot" src="call-112-screenshot.png" alt="Emergency Call Simulation">
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
-
     <script>
-        // --- DOM Element References ---
+        // --- DOM Elements ---
         const video = document.getElementById("video");
         const canvas = document.getElementById("canvas");
         const ctx = canvas.getContext("2d");
@@ -140,667 +124,242 @@
         const speechRecognitionStatusEl = document.getElementById("speechRecognitionStatus");
         const callSimulationOverlay = document.getElementById('callSimulationOverlay');
         const callScreenshot = document.getElementById('callScreenshot');
+        const hideDuringSimulationEls = document.querySelectorAll('.hide-during-simulation');
 
-        // --- Global Variables for AI Model and Speech ---
-        let model;
-        let lastSpokenFullInfo = ""; // Stores last spoken full info text to avoid repetition
-        let speaking = false; // Flag to indicate if speech synthesis is currently active
-        let isMuted = false; // Controls general app speech (emergency warnings bypass this)
+        // --- Variables ---
+        let model, recognition, fullInfoIntervalId, currentRecognitionState = 'IDLE';
+        let speaking = false, isMuted = false;
+        let lastSpokenFullInfo = "";
+        const SPEECH_COOLDOWN_FULL_INFO = 60000, SPEECH_COOLDOWN_WARNING = 3000;
+        let lastFullInfoSpeechTime = 0, lastWarningSpeechTime = 0;
+        const CALL_SIMULATION_DURATION = 3000;
 
-        // Speech cooldown periods to prevent rapid-fire alerts
-        const SPEECH_COOLDOWN_FULL_INFO = 60000; // 60 seconds (1 minute) cooldown for periodic info updates
-        const SPEECH_COOLDOWN_WARNING = 3000; // 3 seconds cooldown for proximity warnings
-        let lastFullInfoSpeechTime = 0; // Timestamp of last full info speech
-        let lastWarningSpeechTime = 0; // Timestamp of last warning speech
-        let fullInfoIntervalId; // Store ID for periodic full info speaking interval
-        let callSimulationTimeoutId; // Timeout ID for the call simulation
-        const CALL_SIMULATION_DURATION = 3000; // 3 seconds for screenshot display
-
-        // --- Performance Optimization Variables ---
-        let frameCount = 0;
-        const FRAMES_TO_SKIP = 2; // Process AI detection every 3rd frame (0, 1, 2 -> process 2)
-
-        // --- Proximity Warning Threshold ---
-        // Adjust this value: a larger number means the person needs to be physically closer
-        // for the "VERY CLOSE!" warning to trigger (based on bounding box height).
-        const PROXIMITY_THRESHOLD_HEIGHT = 450;
-
-        // --- Web Speech Recognition API Setup ---
-        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-        let recognition; // Instance of SpeechRecognition
-        let currentRecognitionState = 'IDLE'; // App will always be in IDLE for general commands
-
-        // --- PWA Service Worker Registration ---
+        // --- Service Worker ---
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('service-worker.js')
-                    .then(registration => {
-                        console.log('Service Worker registered! Scope:', registration.scope);
-                    })
-                    .catch(err => {
-                        console.log('Service Worker registration failed:', err);
-                    });
+                navigator.serviceWorker.register('service-worker.js');
             });
         }
 
-        /**
-         * Text-to-Speech (TTS) Function.
-         * Handles speaking text, applies cooldowns, and manages mute state.
-         * "emergency" type speech bypasses the mute setting.
-         * @param {string} text The text string to be spoken.
-         * @param {string} type The type of speech ('fullInfo', 'warning', 'emergency').
-         */
-        async function speak(text, type = 'fullInfo') {
-            console.log(`[TTS Debug] Attempting to speak (${type}): "${text}"`);
-
-            let currentCooldown = 0;
-            let lastSpeechTimeRef = 0;
-
-            // Determine cooldown and last speech time based on type
-            if (type === 'fullInfo') {
-                currentCooldown = SPEECH_COOLDOWN_FULL_INFO;
-                lastSpeechTimeRef = lastFullInfoSpeechTime;
-            } else if (type === 'warning') {
-                currentCooldown = SPEECH_COOLDOWN_WARNING;
-                lastSpeechTimeRef = lastWarningSpeechTime;
-            } else if (type === 'emergency') { // 'emergency' type is used for critical alerts that bypass mute/cooldown
-                currentCooldown = 0; // Emergency alerts have no cooldown
-            }
-
-            // Block speech if muted (unless it's an emergency alert type)
-            if (isMuted && type !== 'emergency') {
-                console.log(`[TTS Debug] Speech (${type}) blocked: Muted.`);
-                return;
-            }
-
-            // Block speech if another speech is active or within cooldown
-            if (speaking || (Date.now() - lastSpeechTimeRef < currentCooldown)) {
-                console.log(`[TTS Debug] Speech (${type}) blocked due to cooldown or already speaking.`);
-                return;
-            }
-
-            // For critical speech (like emergency or immediate feedback), cancel any ongoing speech
-            if (type === 'emergency' && speechSynthesis.speaking) {
-                speechSynthesis.cancel();
-                console.log("[TTS Debug] Cancelled ongoing speech for emergency.");
-            } else if (type !== 'emergency' && speechSynthesis.speaking) {
-                // If other type of speech is requested while something else is speaking, defer it
-                console.log(`[TTS Debug] Speech (${type}) deferred, another speech is active.`);
-                return;
-            }
-
-            // Get available voices on the device
-            const voices = speechSynthesis.getVoices();
-            if (voices.length === 0) {
-                console.warn("[TTS Debug] No speech synthesis voices available on this device.");
-                statusEl.textContent = "❌ Speech not available (no voices)";
-                statusEl.style.color = 'red';
-                return;
-            } else {
-                 console.log("[TTS Debug] Available voices:", voices.map(v => v.name));
-            }
-
-            // Create a new SpeechSynthesisUtterance object
-            const utterance = new SpeechSynthesisUtterance(text);
-            utterance.lang = "en-IN"; // Set language to Indian English
-
-            // Try to find a specific Indian English voice for better pronunciation
-            const indianVoice = voices.find(voice => voice.lang === 'en-IN' || voice.lang === 'en-GB' || voice.name.includes('India'));
-            if (indianVoice) {
-                utterance.voice = indianVoice;
-                console.log("[TTS Debug] Using voice:", indianVoice.name);
-            } else {
-                console.warn("[TTS Debug] No specific Indian/GB English voice found, using default.");
-            }
-
-            // Speech properties
-            utterance.rate = 1.0;  // Normal speed (0.1 to 10)
-            utterance.pitch = 1.0; // Normal pitch (0 to 2)
-            utterance.volume = 1.0; // Full volume (0 to 1)
-
-            return new Promise(resolve => { // Return a promise that resolves when speech ends
-                utterance.onstart = () => { speaking = true; console.log("[TTS Debug] Speech started."); };
-                utterance.onend = () => {
-                    speaking = false;
-                    if (type === 'fullInfo') { lastFullInfoSpeechTime = Date.now(); }
-                    else if (type === 'warning') { lastWarningSpeechTime = Date.now(); }
-                    console.log("[TTS Debug] Speech ended.");
-                    resolve(); // Resolve the promise when speech finishes
-                };
-                utterance.onerror = (event) => {
-                    console.error('[TTS Debug] SpeechSynthesisUtterance.onerror:', event.error, event);
-                    speaking = false;
-                    resolve(); // Resolve anyway on error to avoid blocking
-                };
-                speechSynthesis.speak(utterance);
-            });
-        }
-
-        // --- Function to strip emojis from a string for TTS ---
-        function stripEmojis(text) {
-            // Regex to match most common emoji ranges, symbols, dingbats, etc.
-            // This is a broad regex and might need fine-tuning for very specific cases.
-            // It replaces them with an empty string.
-            return text.replace(/(\u00a9|\u00ae|[\u2000-\u3300]|\ud83c[\ud000-\udfff]|\ud83d[\ud000-\udfff]|\ud83e[\ud000-\udfff])/g, '');
-        }
-
-        // --- Date and Time Update ---
+        // --- Date & Time ---
         function updateDateTime() {
             const now = new Date();
-            const date = now.toDateString();
-            const time = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-            datetimeEl.textContent = `📅 ${date} | ⏰ ${time}`;
+            datetimeEl.textContent = `📅 ${now.toDateString()} | ⏰ ${now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`;
         }
-        setInterval(updateDateTime, 1000); // Update every second
-        updateDateTime(); // Initial call to display immediately
+        setInterval(updateDateTime, 1000); updateDateTime();
 
         // --- Camera Setup ---
         async function setupCamera() {
             try {
-                // Request video stream from the user's camera
                 const stream = await navigator.mediaDevices.getUserMedia({
-                    video: {
-                        facingMode: 'environment', // Prioritize the rear camera ('user' for front camera)
-                        width: { ideal: 640 }, // Request ideal resolution for performance and quality
-                        height: { ideal: 480 }
-                    },
-                    audio: false // We don't need audio input from this stream
+                    video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 480 } },
+                    audio: false
                 });
-                video.srcObject = stream; // Assign the stream to the video element
-
-                return new Promise((resolve) => {
+                video.srcObject = stream;
+                return new Promise(resolve => {
                     video.onloadedmetadata = () => {
-                        video.play(); // Start playing the video stream
-                        resizeCanvas(); // Adjust canvas size to match video
-                        resolve(video); // Resolve the promise with the video element
+                        video.play();
+                        resizeCanvas();
+                        resolve(video);
                     };
                 });
             } catch (error) {
-                console.error("Error accessing camera:", error);
-                let errorMessage = "❌ Camera access denied or not available.";
-                if (error.name === "NotAllowedError") {
-                    errorMessage += " Please grant camera permissions."; // Specific message for permission denial
-                } else if (error.name === "NotFoundError") {
-                    errorMessage += " No suitable camera found."; // Specific message if no camera is found
-                }
-                statusEl.textContent = errorMessage; // Display error message in status area
-                statusEl.style.color = 'red'; // Set error message color to red
-                return null; // Indicate camera setup failed
+                statusEl.textContent = "❌ Camera access denied or not available.";
+                statusEl.style.color = 'red';
+                return null;
             }
         }
-
-        // --- Canvas Resizing ---
-        // Ensures the canvas matches the video stream's actual dimensions for correct drawing.
         function resizeCanvas() {
             canvas.width = video.videoWidth;
             canvas.height = video.videoHeight;
         }
 
-        // --- Main Object Detection Loop ---
-        // Continuously detects objects in the video stream and updates the UI.
+        // --- Object Detection ---
+        let frameCount = 0, FRAMES_TO_SKIP = 2;
+        const PROXIMITY_THRESHOLD_HEIGHT = 450;
         async function detectFrame() {
-            if (video.readyState < 2) { // Ensure video stream is fully loaded and ready
-                requestAnimationFrame(detectFrame); // Request next frame if not ready
-                return;
-            }
-
-            // Frame skipping for performance: only process every (FRAMES_TO_SKIP + 1) frame
+            if (video.readyState < 2) { requestAnimationFrame(detectFrame); return; }
             frameCount++;
-            if (frameCount % (FRAMES_TO_SKIP + 1) !== 0) {
-                requestAnimationFrame(detectFrame); // Skip this frame and request the next
-                return;
-            }
-
+            if (frameCount % (FRAMES_TO_SKIP + 1) !== 0) { requestAnimationFrame(detectFrame); return; }
             let predictions;
             try {
-                // Perform object detection on the video frame. This is an asynchronous operation.
-                if (model) { // Ensure model is loaded before attempting detection
-                    predictions = await model.detect(video);
-                } else {
-                    requestAnimationFrame(detectFrame); // If model not loaded, skip and try next frame
-                    return;
-                }
-            } catch (e) {
-                console.error("Error during model detection (async part):", e);
-                requestAnimationFrame(detectFrame); // Log error and continue to next frame
-                return;
-            }
-
-            // Use tf.tidy for synchronous TensorFlow.js operations (like drawing)
-            // to automatically manage and dispose of intermediate tensors, preventing memory leaks.
-            tf.tidy(() => {
-                ctx.clearRect(0, 0, canvas.width, canvas.height); // Clear previous drawings on canvas
-                // The video element itself is set to object-fit: cover, so drawing it on canvas
-                // as a background here is often not necessary and can be skipped for performance.
-                // ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-                let personDetected = false;
-                let detectedObjectsText = "👁️ No objects detected.";
-                let currentFrameObjects = []; // To store objects for Gemini
-
-                // Iterate over all detected objects
-                predictions.forEach(pred => {
-                    // Process only predictions with confidence score > 60%
-                    if (pred.score > 0.6) {
-                        const [x, y, width, height] = pred.bbox; // Bounding box coordinates and dimensions
-
-                        // Draw bounding box (green by default)
-                        ctx.strokeStyle = "#00FF00";
-                        ctx.lineWidth = 2;
-                        ctx.strokeRect(x, y, width, height);
-
-                        // Draw label text (e.g., "Person (95%)")
-                        ctx.fillStyle = "#00FF00";
-                        ctx.font = '16px sans-serif';
-                        ctx.fillText(`${pred.class} (${Math.round(pred.score * 100)}%)`, x, y > 10 ? y - 5 : 10);
-
-                        detectedObjectsText = `👁️ I see a ${pred.class}`; // Update detected object display
-
-                        currentFrameObjects.push({
-                            class: pred.class,
-                            score: pred.score,
-                            bbox: { x, y, width, height }
-                        });
-
-                        // Check specifically for 'person' class for proximity warning
-                        if (pred.class === 'person') {
-                            personDetected = true;
-                            // Trigger "very close" warning if person's bounding box height exceeds threshold
-                            if (height > PROXIMITY_THRESHOLD_HEIGHT) {
-                                // Change drawing style for "very close" warning to red and thicker
-                                ctx.strokeStyle = 'red';
-                                ctx.lineWidth = 4;
-                                ctx.strokeRect(x, y, width, height);
-                                ctx.fillStyle = 'red';
-                                ctx.fillText(`VERY CLOSE!`, x, y + height + 20); // Add "VERY CLOSE!" text
-                                speak("Warning: Person very close.", 'warning'); // Trigger warning speech
-                            }
+                if (model) predictions = await model.detect(video);
+                else { requestAnimationFrame(detectFrame); return; }
+            } catch { requestAnimationFrame(detectFrame); return; }
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            let personDetected = false, detectedObjectsText = "👁️ No objects detected.";
+            predictions.forEach(pred => {
+                if (pred.score > 0.6) {
+                    const [x, y, width, height] = pred.bbox;
+                    ctx.strokeStyle = "#00FF00";
+                    ctx.lineWidth = 2;
+                    ctx.strokeRect(x, y, width, height);
+                    ctx.fillStyle = "#00FF00";
+                    ctx.font = '16px sans-serif';
+                    ctx.fillText(`${pred.class} (${Math.round(pred.score * 100)}%)`, x, y > 10 ? y - 5 : 10);
+                    detectedObjectsText = `👁️ I see a ${pred.class}`;
+                    if (pred.class === 'person') {
+                        personDetected = true;
+                        if (height > PROXIMITY_THRESHOLD_HEIGHT) {
+                            ctx.strokeStyle = 'red';
+                            ctx.lineWidth = 4;
+                            ctx.strokeRect(x, y, width, height);
+                            ctx.fillStyle = 'red';
+                            ctx.fillText(`VERY CLOSE!`, x, y + height + 20);
+                            speak("Warning: Person very close.", 'warning');
                         }
                     }
-                });
-
-                objectEl.textContent = detectedObjectsText; // Update displayed object status
-
-                // Update proximity status text (simple person detection status)
-                if (personDetected) {
-                    proximityStatusEl.className = ''; // Remove warning style
-                    proximityStatusEl.textContent = "🟢 Person detected";
-                } else {
-                    proximityStatusEl.className = ''; // No warning, no person detected
-                    proximityStatusEl.textContent = "🟢 No person detected";
                 }
-
-                // Store objects for Gemini description
-                window.detectedObjectsForGemini = currentFrameObjects;
             });
-
-            requestAnimationFrame(detectFrame); // Request the next animation frame to continue the loop
+            objectEl.textContent = detectedObjectsText;
+            proximityStatusEl.textContent = personDetected ? "🟢 Person detected" : "🟢 No person detected";
+            requestAnimationFrame(detectFrame);
         }
 
-        // --- Gemini API Integration for Scene Description ---
-        async function getSceneDescriptionFromGemini() {
-            if (currentRecognitionState !== 'IDLE') {
-                console.log("[Gemini] Skipping description request, app is busy.");
-                return;
-            }
-
-            currentRecognitionState = 'PROCESSING_GEMINI';
-            clearInterval(fullInfoIntervalId); // Pause periodic info
-            if (recognition) {
-                recognition.stop(); // Stop continuous listening
-            }
-            
-            speechRecognitionStatusEl.innerHTML = '<i class="fas fa-microchip"></i> Generating description...';
-            await speak("Generating scene description, please wait...", 'emergency'); // Emergency type to bypass mute
-
-            try {
-                // Get objects from the last frame
-                const objects = window.detectedObjectsForGemini || [];
-                let promptText = "Describe the following scene based on the detected objects. Make it concise and helpful for a visually impaired user. If no objects are present, say that the view is clear.\n\nDetected objects: ";
-
-                if (objects.length === 0) {
-                    promptText += "None.";
-                } else {
-                    const objectDescriptions = objects.map(obj => {
-                        const { x, y, width, height } = obj.bbox;
-                        // Calculate approximate position relative to frame center
-                        let position = '';
-                        const centerX = canvas.width / 2;
-                        const centerY = canvas.height / 2;
-                        const objectCenterX = x + width / 2;
-                        const objectCenterY = y + height / 2;
-
-                        if (width > canvas.width * 0.7 || height > canvas.height * 0.7) {
-                            position = 'very large, likely close,';
-                        } else if (width > canvas.width * 0.3 || height > canvas.height * 0.3) {
-                             position = 'large,';
-                        } else {
-                             position = 'small,';
-                        }
-
-                        if (objectCenterX < centerX * 0.7) position += ' to the left';
-                        else if (objectCenterX > centerX * 1.3) position += ' to the right';
-                        else position += ' in the center';
-
-                        if (objectCenterY < centerY * 0.7) position += ' (upper part)';
-                        else if (objectCenterY > centerY * 1.3) position += ' (lower part)';
-
-                        return `${position} ${obj.class}`;
-                    });
-                    promptText += objectDescriptions.join('; ') + ".";
-                }
-                
-                console.log("[Gemini] Prompt sent:", promptText);
-
-                let chatHistory = [];
-                chatHistory.push({ role: "user", parts: [{ text: promptText }] });
-                const payload = { contents: chatHistory };
-                const apiKey = ""; // API key is provided by Canvas runtime
-                const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
-
-                const response = await fetch(apiUrl, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
-                const result = await response.json();
-
-                let geminiDescription = "Could not generate description.";
-                if (result.candidates && result.candidates.length > 0 &&
-                    result.candidates[0].content && result.candidates[0].content.parts &&
-                    result.candidates[0].content.parts.length > 0) {
-                    geminiDescription = result.candidates[0].content.parts[0].text;
-                } else {
-                    console.error("[Gemini] Unexpected API response structure:", result);
-                    if (result.error && result.error.message) {
-                        geminiDescription = `API Error: ${result.error.message.substring(0, 50)}...`;
-                    }
-                }
-                
-                console.log("[Gemini] Received description:", geminiDescription);
-                await speak(geminiDescription, 'emergency'); // Speak the description
-
-            } catch (error) {
-                console.error("[Gemini] Error generating scene description:", error);
-                await speak("Failed to get scene description. Please check internet connection.", 'emergency');
-            } finally {
-                // Ensure recognition and periodic info resume after a short delay to let speech finish
-                setTimeout(() => {
-                    currentRecognitionState = 'IDLE';
-                    startContinuousRecognition();
-                    // Always resume full info speaking
-                    fullInfoIntervalId = setInterval(speakFullInformation, SPEECH_COOLDOWN_FULL_INFO);
-                    console.log("[SR Debug] Full info speaking resumed after Gemini.");
-                }, 1000); // 1-second delay
-            }
-        }
-
-
-        /**
-         * Sets up the Web Speech Recognition API.
-         * App is always in continuous listening mode.
-         */
-        function setupSpeechRecognition() {
-            if (!SpeechRecognition) {
-                console.warn("Web Speech API (SpeechRecognition) not supported in this browser.");
-                speechRecognitionStatusEl.innerHTML = "❌ Voice commands not supported.";
-                speechRecognitionStatusEl.style.color = 'red';
-                return;
-            }
-
-            recognition = new SpeechRecognition();
-            recognition.continuous = true; 
-            recognition.interimResults = true; // Get partial results for smoother experience
-            recognition.lang = 'en-IN'; // Set recognition language to Indian English
-
-            recognition.onstart = () => {
-                console.log(`[SR Debug] Recognition started. Continuous: ${recognition.continuous}, State: ${currentRecognitionState}`);
-            };
-
-            recognition.onresult = async (event) => { // Made async to await speak()
-                const results = event.results;
-                for (let i = event.resultIndex; i < results.length; i++) {
-                    const transcript = results[i][0].transcript.toLowerCase().trim();
-                    const isFinal = results[i].isFinal;
-
-                    // Display interim results in the status bar for immediate feedback
-                    if (!isFinal) {
-                        speechRecognitionStatusEl.innerHTML = `<i class="fas fa-microphone"></i> Listening: ${transcript}...`;
-                        continue; // Process next result if not final
-                    }
-
-
-                    if (isFinal) {
-                        console.log("[SR Debug] Final recognized:", transcript, "State:", currentRecognitionState);
-
-                        // Since currentRecognitionState is always 'IDLE' now
-                        if (currentRecognitionState === 'IDLE') { 
-                            // --- Mute/Unmute Commands ---
-                            if (transcript.includes("mute")) {
-                                isMuted = true;
-                                await speak("Muted.", 'emergency');
-                                console.log("App muted by voice command.");
-                                speechRecognitionStatusEl.innerHTML = `<i class="fas fa-microphone"></i> Muted | Listening for commands...`;
-                                continue;
-                            }
-                            if (transcript.includes("unmute")) {
-                                isMuted = false;
-                                await speak("Unmuted.", 'emergency');
-                                console.log("App unmuted by voice command.");
-                                speechRecognitionStatusEl.innerHTML = `<i class="fas fa-microphone"></i> Listening for commands...`;
-                                continue;
-                            }
-                            // --- Scene Description Command (Gemini API) ---
-                            if (transcript.includes("describe scene") || transcript.includes("what do you see")) {
-                                getSceneDescriptionFromGemini();
-                                return; // Exit onresult, Gemini process takes over
-                            }
-                            // --- Emergency Call Simulation and Instruction ---
-                            if (transcript.includes("emergency")) {
-                                // Speak the combined instruction and simulation message
-                                await speak(`Initiating simulated emergency call. For an actual direct emergency call, quickly press your phone's power button five times.`, 'emergency');
-                                
-                                // Stop current speech recognition temporarily
-                                if(recognition) recognition.stop();
-                                // Pause periodic information announcements
-                                clearInterval(fullInfoIntervalId);
-                                // Ensure any existing speech is cancelled immediately
-                                speechSynthesis.cancel(); 
-
-                                // Show the call simulation screenshot after a small delay to let speech begin
-                                setTimeout(() => {
-                                    showCallSimulation();
-                                }, 500); // 0.5 second delay
-
-                                return; // Exit onresult
-                            }
-                        }
-                    }
-                }
-            };
-
-            // Event handler for speech recognition errors
-            recognition.onerror = (event) => {
-                console.error("[SR Debug] Speech recognition error:", event.error, event.message);
-                
-                if (event.error === 'no-speech') {
-                   console.log("[SR Debug] No speech detected (continuous mode).");
-                } else if (event.error === 'not-allowed') {
-                   speak("Microphone permission denied. Voice commands are disabled.", 'emergency');
-                   speechRecognitionStatusEl.innerHTML = "❌ Mic permission denied!";
-                   speechRecognitionStatusEl.style.color = 'red';
-                   recognition.continuous = false; // Stop trying to restart if permission denied
-                } else if (event.error === 'network') {
-                   speak("Voice commands require an internet connection.", 'emergency');
-                   speechRecognitionStatusEl.innerHTML = "🌐 No internet for voice!";
-                   speechRecognitionStatusEl.style.color = 'orange';
-                } else {
-                   speak("A voice command error occurred. Trying to restart.", 'emergency');
-                   speechRecognitionStatusEl.innerHTML = `⚠️ Voice error: ${event.error}`;
-                   speechRecognitionStatusEl.style.color = 'orange';
-                }
-
-                // Attempt to restart continuous recognition if it was supposed to be running
-                if (recognition.continuous && event.error !== 'not-allowed') {
-                    console.log("[SR Debug] Attempting to restart continuous recognition after error.");
-                    try {
-                         recognition.start();
-                    } catch (e) {
-                         console.error("[SR Debug] Failed to restart recognition:", e);
-                    }
-                }
-            };
-
-            // Event handler when speech recognition ends
-            recognition.onend = () => {
-                if (recognition.continuous) {
-                    console.log("[SR Debug] Continuous recognition ended, restarting...");
-                    try {
-                        recognition.start(); // Automatically restart to maintain continuous listening
-                    } catch (e) {
-                        console.warn("[SR Debug] Failed to restart continuous recognition:", e);
-                    }
-                } else {
-                    console.log("[SR Debug] Non-continuous recognition ended. Not auto-restarting.");
-                }
-            };
-        }
-
-        /**
-         * Helper function to start continuous recognition (for general commands).
-         */
-        function startContinuousRecognition() {
-            if (recognition && currentRecognitionState === 'IDLE') { // currentRecognitionState is always 'IDLE' now
-                try {
-                    recognition.continuous = true;
-                    recognition.interimResults = true;
-                    recognition.start();
-                    console.log("[SR Debug] Continuous recognition started.");
-                    speechRecognitionStatusEl.innerHTML = '<i class="fas fa-microphone"></i> Listening for commands...';
-                } catch (e) {
-                    console.warn("[SR Debug] Recognition start failed (likely already running or permission issue):", e);
-                    if (e.message.includes("already started")) {
-                        // Ignore if already started
-                    } else if (e.message.includes("permission")) {
-                         speechRecognitionStatusEl.innerHTML = "❌ Mic permission needed!";
-                         speechRecognitionStatusEl.style.color = 'red';
-                    }
-                }
-            } else {
-                 console.log("[SR Debug] Cannot start continuous recognition. Recognition object not ready or not IDLE state.");
-            }
-        }
-
-        // --- Call Simulation Functions ---
-        /**
-         * Shows the call simulation screenshot and sets a timeout to hide it.
-         */
-        function showCallSimulation() {
-            callSimulationOverlay.style.display = 'flex'; // Make overlay visible
-            // Set timeout to automatically hide the simulation
-            callSimulationTimeoutId = setTimeout(hideCallSimulation, CALL_SIMULATION_DURATION);
-            console.log(`[Simulation] Call simulation started for ${CALL_SIMULATION_DURATION / 1000} seconds.`);
-        }
-
-        /**
-         * Hides the call simulation screenshot and resumes normal app operations.
-         */
-        function hideCallSimulation() {
-            clearTimeout(callSimulationTimeoutId); // Clear any pending automatic hide
-            callSimulationOverlay.style.display = 'none'; // Hide the overlay
-            console.log("[Simulation] Call simulation ended.");
-            
-            // Resume main app functionalities
-            startContinuousRecognition(); // Resume speech recognition
-            clearInterval(fullInfoIntervalId); // Clear old interval if it's running
-            fullInfoIntervalId = setInterval(speakFullInformation, SPEECH_COOLDOWN_FULL_INFO); // Start periodic info speaking
-            console.log("[Simulation] App functionalities resumed.");
-        }
-
-        // Add event listener to the overlay to hide it on any tap/click
-        callSimulationOverlay.addEventListener('click', hideCallSimulation);
-
-
-        // --- Initial App Load Function ---
-        async function main() {
-            statusEl.textContent = "🔄 Loading AI model... SafeVision";
-            // Delay to allow browser to prepare SpeechSynthesis voices and potentially satisfy autoplay policy
-            await new Promise(resolve => setTimeout(resolve, 500));
-
-            // Check if voices are available immediately.
-            const initialVoices = speechSynthesis.getVoices();
-            if (initialVoices.length === 0) {
-                console.warn("[Main] No voices available initially. Setting up voiceschanged listener.");
-                statusEl.textContent = "❌ Speech not ready. No voices.";
-                statusEl.style.color = 'red';
-                // Set up listener for when voices are loaded/changed
-                speechSynthesis.onvoiceschanged = () => {
-                    console.log("[TTS Debug] Voices loaded event fired. Voices:", speechSynthesis.getVoices().map(v => v.name));
-                    // Attempt to speak the initial prompt IF we were waiting for voices
-                    if (statusEl.textContent.includes("Speech not ready")) {
-                        statusEl.textContent = "✅ Voices loaded!";
-                        statusEl.style.color = '';
-                        // Re-trigger the initial flow now that voices are available
-                        startAppLogicFlow();
-                    }
+        // --- Speech Synthesis ---
+        async function speak(text, type = 'fullInfo') {
+            if (isMuted && type !== 'emergency') return;
+            let cooldown = (type === 'warning') ? SPEECH_COOLDOWN_WARNING : SPEECH_COOLDOWN_FULL_INFO;
+            let lastSpeech = (type === 'warning') ? lastWarningSpeechTime : lastFullInfoSpeechTime;
+            if (speaking || (Date.now() - lastSpeech < cooldown)) return;
+            if (type === 'emergency' && speechSynthesis.speaking) speechSynthesis.cancel();
+            const voices = speechSynthesis.getVoices();
+            if (!voices.length) return;
+            const utterance = new SpeechSynthesisUtterance(text);
+            utterance.lang = "en-IN";
+            const indianVoice = voices.find(voice => voice.lang === 'en-IN' || voice.lang === 'en-GB' || voice.name.includes('India'));
+            if (indianVoice) utterance.voice = indianVoice;
+            utterance.rate = 1.0; utterance.pitch = 1.0; utterance.volume = 1.0;
+            return new Promise(resolve => {
+                utterance.onstart = () => { speaking = true; };
+                utterance.onend = () => {
+                    speaking = false;
+                    if (type === 'fullInfo') lastFullInfoSpeechTime = Date.now();
+                    else if (type === 'warning') lastWarningSpeechTime = Date.now();
+                    resolve();
                 };
-            } else {
-                console.log("[Main] Voices available immediately:", initialVoices.map(v => v.name));
-                // Proceed directly if voices are already there
-                startAppLogicFlow();
-            }
-
-
-            async function startAppLogicFlow() {
-                await setupCamera(); // Set up camera
-                if (!video.srcObject) { // If camera setup fails, stop main execution
-                    console.error("Camera setup failed, aborting main execution.");
-                    return;
-                }
-
-                // Load the COCO-SSD AI model (lite_mobilenet_v2 for performance)
-                model = await cocoSsd.load({base: 'lite_mobilenet_v2'});
-                statusEl.textContent = "✅ AI model loaded!";
-                console.log("[Main] AI model loaded. Initializing speech recognition.");
-
-                setupSpeechRecognition(); // Initialize speech recognition object
-                startContinuousRecognition(); // Start continuous listening for commands immediately
-                
-                // App starts immediately with welcome and periodic info, no emergency number setup
-                await speak("Welcome to SafeVision.", 'fullInfo'); 
-                speakFullInformation(); // Speak full info once immediately
-                fullInfoIntervalId = setInterval(speakFullInformation, SPEECH_COOLDOWN_FULL_INFO); // Start periodic interval
-                console.log("[Main] Periodic full information speaking started.");
-            } // End of startAppLogicFlow
-            
-            detectFrame(); // Start the continuous object detection loop
+                utterance.onerror = () => { speaking = false; resolve(); };
+                speechSynthesis.speak(utterance);
+            });
         }
-
-        // --- Function to combine all displayed info for periodic speech ---
+        function stripEmojis(text) {
+            return text.replace(/(\u00a9|\u00ae|[\u2000-\u3300]|\ud83c[\ud000-\udfff]|\ud83d[\ud000-\udfff]|\ud83e[\ud000-\udfff])/g, '');
+        }
         function speakFullInformation() {
-            // Only speak if in IDLE state, to avoid interrupting other processes
             if (currentRecognitionState === 'IDLE') {
-                // Strip emojis from text content before speaking
                 const combinedText = `
                     Status: ${stripEmojis(statusEl.textContent)}.
                     Weather: ${stripEmojis(weatherEl.textContent)}.
                     Date and Time: ${stripEmojis(datetimeEl.textContent)}.
                     Object detection: ${stripEmojis(objectEl.textContent)}.
                     Proximity status: ${stripEmojis(proximityStatusEl.textContent)}.
-                `.replace(/\s+/g, ' ').trim(); // Clean up extra spaces
-
-                // Only speak if the combined text has changed since the last full info speech
+                `.replace(/\s+/g, ' ').trim();
                 if (combinedText !== lastSpokenFullInfo) {
                     speak(combinedText, 'fullInfo');
                     lastSpokenFullInfo = combinedText;
                 }
-            } else {
-                // This is expected behavior if app is busy
-                console.log("[Full Info] Skipping periodic announcement: App is not in IDLE state.");
             }
         }
 
-        // Start the application once the DOM is fully loaded
+        // --- Speech Recognition ---
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        function setupSpeechRecognition() {
+            if (!SpeechRecognition) {
+                speechRecognitionStatusEl.innerHTML = "❌ Voice commands not supported.";
+                speechRecognitionStatusEl.style.color = 'red';
+                return;
+            }
+            recognition = new SpeechRecognition();
+            recognition.continuous = true; 
+            recognition.interimResults = true;
+            recognition.lang = 'en-IN';
+            recognition.onresult = async (event) => {
+                const results = event.results;
+                for (let i = event.resultIndex; i < results.length; i++) {
+                    const transcript = results[i][0].transcript.toLowerCase().trim();
+                    const isFinal = results[i].isFinal;
+                    if (!isFinal) {
+                        speechRecognitionStatusEl.innerHTML = `<i class="fas fa-microphone"></i> Listening: ${transcript}...`;
+                        continue;
+                    }
+                    if (isFinal && currentRecognitionState === 'IDLE') {
+                        if (transcript.includes("mute")) {
+                            isMuted = true;
+                            await speak("Muted.", 'emergency');
+                            speechRecognitionStatusEl.innerHTML = `<i class="fas fa-microphone"></i> Muted | Listening for commands...`;
+                            continue;
+                        }
+                        if (transcript.includes("unmute")) {
+                            isMuted = false;
+                            await speak("Unmuted.", 'emergency');
+                            speechRecognitionStatusEl.innerHTML = `<i class="fas fa-microphone"></i> Listening for commands...`;
+                            continue;
+                        }
+                        // EMERGENCY!
+                        if (transcript.includes("emergency")) {
+                            await speak("Initiating simulated emergency call.", 'emergency');
+                            showCallSimulation();
+                            return;
+                        }
+                    }
+                }
+            };
+            recognition.onend = () => {
+                if (recognition && recognition.continuous && !callSimulationOverlay.classList.contains('shown')) {
+                    try { recognition.start(); } catch {}
+                }
+            };
+        }
+        function startContinuousRecognition() {
+            if (recognition && currentRecognitionState === 'IDLE') {
+                try {
+                    recognition.continuous = true;
+                    recognition.interimResults = true;
+                    recognition.start();
+                    speechRecognitionStatusEl.innerHTML = '<i class="fas fa-microphone"></i> Listening for commands...';
+                } catch {}
+            }
+        }
+
+        // --- Emergency Call Simulation ---
+        function showCallSimulation() {
+            // Hide all UI overlays
+            hideDuringSimulationEls.forEach(el => el.classList.add('hidden'));
+            callSimulationOverlay.style.display = 'flex';
+            callSimulationOverlay.classList.add('shown');
+            // Pause periodic info
+            clearInterval(fullInfoIntervalId);
+            // Cancel ongoing speech and recognition
+            if (recognition) recognition.stop();
+            speechSynthesis.cancel();
+        }
+        function hideCallSimulation() {
+            callSimulationOverlay.style.display = 'none';
+            callSimulationOverlay.classList.remove('shown');
+            // Show all UI overlays
+            hideDuringSimulationEls.forEach(el => el.classList.remove('hidden'));
+            // Resume recognition and info speaking
+            startContinuousRecognition();
+            clearInterval(fullInfoIntervalId);
+            fullInfoIntervalId = setInterval(speakFullInformation, SPEECH_COOLDOWN_FULL_INFO);
+        }
+        callSimulationOverlay.addEventListener('click', hideCallSimulation);
+
+        // --- Main App ---
+        async function main() {
+            statusEl.textContent = "🔄 Loading AI model... SafeVision";
+            await new Promise(resolve => setTimeout(resolve, 500));
+            await setupCamera();
+            if (!video.srcObject) return;
+            model = await cocoSsd.load({base: 'lite_mobilenet_v2'});
+            statusEl.textContent = "✅ AI model loaded!";
+            setupSpeechRecognition();
+            startContinuousRecognition();
+            await speak("Welcome to SafeVision.", 'fullInfo'); 
+            speakFullInformation();
+            fullInfoIntervalId = setInterval(speakFullInformation, SPEECH_COOLDOWN_FULL_INFO);
+            detectFrame();
+        }
         document.addEventListener('DOMContentLoaded', main);
     </script>
 </body>
