@@ -42,6 +42,7 @@
         #info {
             position: absolute;
             top: 10px; left: 10px;
+            text-align: left; /* Align text to left for readability */
             background-color: rgba(0, 0, 0, 0.7);
             padding: 10px;
             border-radius: 8px;
@@ -81,6 +82,7 @@
             top: 0; left: 0;
             width: 100vw; height: 100vh;
             background-color: rgba(0,0,0,0.98); /* Near-black background for true full screen effect */
+            display: flex; /* Will be set to 'flex' by JS when visible */
             justify-content: center;
             align-items: center;
             z-index: 9999; /* Ensure it's on top of everything */
@@ -146,8 +148,10 @@
         let model, recognition, fullInfoIntervalId, currentRecognitionState = 'IDLE';
         let speaking = false, isMuted = false;
         let lastSpokenFullInfo = "";
-        const SPEECH_COOLDOWN_FULL_INFO = 60000, SPEECH_COOLDOWN_WARNING = 3000;
-        let lastFullInfoSpeechTime = 0, lastWarningSpeechTime = 0;
+        const SPEECH_COOLDOWN_FULL_INFO = 60000; // 60 seconds (1 minute) cooldown for periodic info updates
+        const SPEECH_COOLDOWN_WARNING = 3000; // 3 seconds cooldown for proximity warnings
+        let lastFullInfoSpeechTime = 0; // Timestamp of last full info speech
+        let lastWarningSpeechTime = 0; // Timestamp of last warning speech
         const CALL_SIMULATION_DURATION = 3000; // 3 seconds for screenshot display
         let callSimulationTimeoutId; // Timeout ID for the call simulation auto-hide
 
@@ -273,7 +277,8 @@
             // Always cancel any ongoing speech for emergency commands, or if a non-emergency
             // speech is requested and something else is already speaking.
             if (speechSynthesis.speaking) {
-                if (type === 'emergency' || type !== 'emergency') { // Cancel any speech if current is higher priority or if new speech requested while busy
+                // If it's an emergency type, or if it's a non-emergency type but something is already speaking, cancel.
+                if (type === 'emergency' || (type !== 'emergency' && speaking)) { 
                     speechSynthesis.cancel();
                     console.log("[TTS Debug] Cancelled ongoing speech.");
                 }
@@ -321,7 +326,8 @@
         }
 
         function speakFullInformation() {
-            if (currentRecognitionState === 'IDLE' && callSimulationOverlay.style.display === 'none') { // Only speak if not in simulation
+            // Only speak if not in simulation AND if in IDLE state (not processing Gemini)
+            if (currentRecognitionState === 'IDLE' && callSimulationOverlay.style.display === 'none') { 
                 const combinedText = `
                     Status: ${stripEmojis(statusEl.textContent)}.
                     Weather: ${stripEmojis(weatherEl.textContent)}.
