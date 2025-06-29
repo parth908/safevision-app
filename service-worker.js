@@ -1,15 +1,15 @@
-const CACHE_NAME = 'safevision-cache-v6'; // Make sure this is v6 or higher to force update
+const CACHE_NAME = 'safevision-cache-v8'; // Explicitly set to v8 to force cache refresh
 const urlsToCache = [
   './',
   './index.html',
   './manifest.json',
   './icon-192.png',
   './icon-512.png',
-  './call-112-screenshot.png' // Added your screenshot to the cache
+  './call-112-screenshot.png' // Make sure your screenshot is explicitly cached!
 ];
 
 self.addEventListener('install', (event) => {
-  console.log('[Service Worker] Installing - v6. Taking control immediately.');
+  console.log('[Service Worker] Installing - v8. Taking control immediately.');
   event.waitUntil(
     caches.open(CACHE_NAME)
       .then((cache) => {
@@ -22,7 +22,7 @@ self.addEventListener('install', (event) => {
 });
 
 self.addEventListener('activate', (event) => {
-  console.log('[Service Worker] Activating - v6. Claiming clients.');
+  console.log('[Service Worker] Activating - v8. Claiming clients.');
   const cacheWhitelist = [CACHE_NAME];
   event.waitUntil(
     caches.keys().then((cacheNames) => {
