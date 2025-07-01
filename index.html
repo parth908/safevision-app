@@ -4,12 +4,10 @@
     <meta charset="UTF-8" />
     <title>SafeVision</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-    <!-- Manifest for PWA features -->
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#000000">
     <link rel="apple-touch-icon" href="icon-192.png">
 
-    <!-- Font Awesome for Icons (Microphone for listening status) -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
 
     <style>
@@ -118,13 +116,10 @@
         <i class="fas fa-microphone"></i> Listening...
     </div>
 
-    <!-- Call Simulation Overlay -->
     <div id="callSimulationOverlay">
-        <!-- IMPORTANT: Ensure 'call-112-screenshot.png' is uploaded to your GitHub repo's root directory -->
         <img id="callScreenshot" src="call-112-screenshot.png" alt="Emergency Call Simulation">
     </div>
 
-    <!-- TensorFlow.js and COCO-SSD Model Libraries from CDN -->
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
 
@@ -158,13 +153,30 @@
         // --- Service Worker ---
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('service-worker.js')
-                    .then(registration => {
-                        console.log('[Service Worker] registered! Scope:', registration.scope);
-                    })
-                    .catch(err => {
-                        console.error('[Service Worker] registration failed:', err);
-                    });
+                console.log('[Service Worker Debug] Attempting to register service worker.');
+                console.log('[Service Worker Debug] Current protocol:', location.protocol); // Log the current protocol
+                console.log('[Service Worker Debug] Current origin:', location.origin);
+                console.log('[Service Worker Debug] Current href:', location.href);
+                const swPath = 'service-worker.js';
+                console.log('[Service Worker Debug] Service Worker script path:', swPath);
+
+                // Only attempt to register if the protocol is http: or https:
+                if (location.protocol === 'https:' || location.protocol === 'http:') {
+                    try {
+                        navigator.serviceWorker.register(swPath)
+                            .then(registration => {
+                                console.log('[Service Worker] registered! Scope:', registration.scope);
+                            })
+                            .catch(err => {
+                                console.error('[Service Worker] registration failed:', err);
+                                console.error('[Service Worker] Full error object:', err); // Log full error object
+                            });
+                    } catch (e) {
+                        console.error('[Service Worker] Direct registration call failed:', e);
+                    }
+                } else {
+                    console.warn('[Service Worker] Not registering service worker: Unsupported protocol for Service Workers:', location.protocol);
+                }
             });
         }
 
@@ -406,6 +418,9 @@
                             
                             // Stop core app functions and show simulation
                             showCallSimulation();
+                        } else {
+                            // NEW: If no specific command, send to general Gemini assistant
+                            await askGemini(transcript);
                         }
                     }
                 }
@@ -473,7 +488,7 @@
 
                 const chatHistory = [{ role: "user", parts: [{ text: promptText }] }];
                 const payload = { contents: chatHistory };
-                const apiKey = ""; 
+                const apiKey = ""; // API key is provided by Canvas runtime
                 const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
 
                 const response = await fetch(apiUrl, {
@@ -505,6 +520,69 @@
                 }, 1000); // 1-second delay
             }
         }
+
+        // --- Gemini API Integration for Basic Assistant ---
+        async function askGemini(userQuestion) {
+            if (currentRecognitionState !== 'IDLE') {
+                console.log("[Gemini Assistant] Skipping request, app is busy.");
+                return;
+            }
+
+            currentRecognitionState = 'PROCESSING_GEMINI_ASSISTANT'; // New state for general assistant
+            clearInterval(fullInfoIntervalId); // Pause periodic info
+            if (recognition) {
+                recognition.stop(); // Stop continuous listening
+            }
+            speechSynthesis.cancel(); // Cancel any existing speech
+
+            speechRecognitionStatusEl.innerHTML = '<i class="fas fa-microchip"></i> Thinking...';
+            await speak("Thinking...", 'emergency'); // Provide feedback
+
+            try {
+                let chatHistory = [];
+                chatHistory.push({ role: "user", parts: [{ text: userQuestion }] }); // User's question directly
+
+                const payload = { contents: chatHistory };
+                const apiKey = ""; // API key is provided by Canvas runtime
+                const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+
+                const response = await fetch(apiUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const result = await response.json();
+
+                let geminiResponse = "I'm sorry, I couldn't process that. Please try again.";
+                if (result.candidates && result.candidates.length > 0 &&
+                    result.candidates[0].content && result.candidates[0].content.parts &&
+                    result.candidates[0].content.parts.length > 0) {
+                    geminiResponse = result.candidates[0].content.parts[0].text;
+                } else {
+                    console.error("[Gemini Assistant] Unexpected API response structure:", result);
+                    if (result.error && result.error.message) {
+                        geminiResponse = `API Error: ${result.error.message.substring(0, 50)}...`;
+                    }
+                }
+                
+                console.log("[Gemini Assistant] Received response:", geminiResponse);
+                await speak(geminiResponse, 'emergency'); // Speak the response
+
+            } catch (error) {
+                console.error("[Gemini Assistant] Error asking Gemini:", error);
+                await speak("I encountered an error. Please check your internet connection.", 'emergency');
+            } finally {
+                // Ensure recognition and periodic info resume after a short delay to let speech finish
+                setTimeout(() => {
+                    currentRecognitionState = 'IDLE';
+                    startContinuousRecognition();
+                    clearInterval(fullInfoIntervalId); 
+                    fullInfoIntervalId = setInterval(speakFullInformation, SPEECH_COOLDOWN_FULL_INFO);
+                    console.log("[SR Debug] Full info speaking resumed after Gemini assistant.");
+                }, 1000); // 1-second delay
+            }
+        }
+
 
         // --- Call Simulation Functions ---
         function showCallSimulation() {
@@ -574,10 +652,12 @@
             statusEl.textContent = "✅ AI model loaded!";
             console.log("[Main] AI model loaded. Initializing speech recognition.");
 
+            // THIS IS THE LINE THAT SAYS "WELCOME TO SAFEVISION"
+            await speak("Welcome to SafeVision.", 'fullInfo'); 
+
             setupSpeechRecognition();
             startContinuousRecognition();
             
-            await speak("Welcome to SafeVision.", 'fullInfo'); 
             speakFullInformation();
             fullInfoIntervalId = setInterval(speakFullInformation, SPEECH_COOLDOWN_FULL_INFO);
             console.log("[Main] Periodic full information speaking started.");
