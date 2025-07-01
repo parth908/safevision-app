@@ -1,4 +1,4 @@
-const CACHE_NAME = 'safevision-cache-v8'; // Explicitly set to v8 to force cache refresh
+const CACHE_NAME = 'safevision-cache-v9'; // Explicitly set to v9 to force cache refresh
 const urlsToCache = [
   './',
   './index.html',
@@ -9,7 +9,7 @@ const urlsToCache = [
 ];
 
 self.addEventListener('install', (event) => {
-  console.log('[Service Worker] Installing - v8. Taking control immediately.');
+  console.log('[Service Worker] Installing - v9. Taking control immediately.');
   event.waitUntil(
     caches.open(CACHE_NAME)
       .then((cache) => {
@@ -22,7 +22,7 @@ self.addEventListener('install', (event) => {
 });
 
 self.addEventListener('activate', (event) => {
-  console.log('[Service Worker] Activating - v8. Claiming clients.');
+  console.log('[Service Worker] Activating - v9. Claiming clients.');
   const cacheWhitelist = [CACHE_NAME];
   event.waitUntil(
     caches.keys().then((cacheNames) => {
