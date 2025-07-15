@@ -1,11 +1,11 @@
-const CACHE_NAME = 'safevision-cache-v3'; // Set to v3 as requested
+const CACHE_NAME = 'safevision-cache-v3'; // Explicitly set to v3 as requested
 const urlsToCache = [
   './',
   './index.html',
   './manifest.json',
   './icon-192.png',
-  './icon-512.png',
-  './call-112-screenshot.png' // Ensure this is still cached if used
+  './icon-512.png'
+  // Removed './call-112-screenshot.png' as it's not part of this version
 ];
 
 self.addEventListener('install', (event) => {
