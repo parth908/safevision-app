@@ -4,10 +4,12 @@
     <meta charset="UTF-8" />
     <title>SafeVision</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <!-- Manifest for PWA features -->
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#000000">
     <link rel="apple-touch-icon" href="icon-192.png">
 
+    <!-- Font Awesome for Icons (Microphone for listening status) -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
 
     <style>
@@ -35,7 +37,12 @@
             width: 100vw; height: 100vh;
             object-fit: cover; /* Ensures video fills screen, may crop if aspect ratios differ */
             z-index: 0; /* Behind other UI elements */
+            border: 2px solid transparent; 
         }
+        video.ready {
+            border: 2px solid limegreen; /* Green border when video is ready */
+        }
+
         /* Information overlay for status, weather, datetime, object detection */
         #info {
             position: absolute;
@@ -72,33 +79,17 @@
             100% { transform: scale(1); opacity: 1; }
         }
 
-        /* Styles for the call simulation screenshot overlay */
-        #callSimulationOverlay {
-            /* Force hidden on load and only shown by JS */
-            display: none !important; 
-            position: fixed;
-            top: 0; left: 0;
-            width: 100vw; height: 100vh;
-            background-color: rgba(0,0,0,0.98); /* Near-black background for true full screen effect */
-            display: flex; /* Will be set to 'flex' by JS when visible */
-            justify-content: center;
-            align-items: center;
-            z-index: 9999; /* Ensure it's on top of everything */
-            cursor: pointer; /* Indicates it's clickable */
-        }
-
-        #callScreenshot {
-            width: 100vw; /* Make image fill the entire viewport width */
-            height: 100vh; /* Make image fill the entire viewport height */
-            object-fit: cover; /* Crop if necessary to cover the entire screen */
-            border-radius: 0; /* No rounded corners for true fullscreen */
-            box-shadow: none; /* No shadow for true fullscreen */
-            display: block; /* Ensure it behaves like a block element */
-        }
-
-        /* Utility class to forcefully hide elements */
-        .hidden {
-            display: none !important;
+        /* New debug info elements */
+        #debugInfo {
+            position: absolute;
+            bottom: 10px; left: 10px;
+            background-color: rgba(0, 0, 0, 0.7);
+            padding: 10px;
+            border-radius: 8px;
+            z-index: 4;
+            font-size: 0.8em;
+            color: #0f0; /* Green for debug info */
+            text-align: left;
         }
     </style>
 </head>
@@ -116,17 +107,23 @@
         <i class="fas fa-microphone"></i> Listening...
     </div>
 
-    <div id="callSimulationOverlay">
-        <img id="callScreenshot" src="call-112-screenshot.png" alt="Emergency Call Simulation">
+    <!-- New Debug Info Display -->
+    <div id="debugInfo" class="ui-element">
+        <div>State: <span id="debugState">IDLE</span></div>
+        <div>Speaking: <span id="debugSpeaking">false</span></div>
+        <div>Muted: <span id="debugMuted">false</span></div>
+        <div>Video Ready: <span id="debugVideoReady">false</span></div>
+        <div>Model Loaded: <span id="debugModelLoaded">false</span></div>
     </div>
 
+    <!-- TensorFlow.js and COCO-SSD Model Libraries from CDN -->
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
 
     <script>
         // --- DOM Elements ---
         const video = document.getElementById("video");
-        const canvas = document.getElementById("canvas");
+        const canvas = document = document.getElementById("canvas");
         const ctx = canvas.getContext("2d");
         const statusEl = document.getElementById("status");
         const weatherEl = document.getElementById("weather");
@@ -134,29 +131,40 @@
         const objectEl = document.getElementById("object");
         const proximityStatusEl = document.getElementById("proximityStatus");
         const speechRecognitionStatusEl = document.getElementById("speechRecognitionStatus");
-        const callSimulationOverlay = document.getElementById('callSimulationOverlay');
-        const callScreenshot = document.getElementById('callScreenshot');
-        // Group all UI elements that should hide during simulation
-        const uiElementsToHide = document.querySelectorAll('.ui-element');
+        // New debug info elements
+        const debugStateEl = document.getElementById('debugState');
+        const debugSpeakingEl = document.getElementById('debugSpeaking');
+        const debugMutedEl = document.getElementById('debugMuted');
+        const debugVideoReadyEl = document.getElementById('debugVideoReady');
+        const debugModelLoadedEl = document.getElementById('debugModelLoaded');
 
         // --- Variables ---
-        let model, recognition, fullInfoIntervalId, currentRecognitionState = 'IDLE';
-        let speaking = false, isMuted = false;
+        let model, recognition, fullInfoIntervalId;
+        let speaking = false;
+        let isMuted = false;
         let lastSpokenFullInfo = "";
         const SPEECH_COOLDOWN_FULL_INFO = 60000; // 60 seconds (1 minute) cooldown for periodic info updates
         const SPEECH_COOLDOWN_WARNING = 3000; // 3 seconds cooldown for proximity warnings
         let lastFullInfoSpeechTime = 0; // Timestamp of last full info speech
         let lastWarningSpeechTime = 0; // Timestamp of last warning speech
-        const CALL_SIMULATION_DURATION = 3000; // 3 seconds for screenshot display
-        let callSimulationTimeoutId; // Timeout ID for the call simulation auto-hide
+        
+        // State management for speech recognition and Gemini processing
+        let currentRecognitionState = 'IDLE'; // States: 'IDLE', 'PROCESSING_GEMINI', 'PROCESSING_GEMINI_ASSISTANT'
+
+        // --- Debug UI Update Function ---
+        function updateDebugInfo() {
+            debugStateEl.textContent = currentRecognitionState;
+            debugSpeakingEl.textContent = speaking;
+            debugMutedEl.textContent = isMuted;
+            debugVideoReadyEl.textContent = video.readyState >= 2; // Check if video is ready
+            debugModelLoadedEl.textContent = !!model; // Check if model object exists
+        }
 
         // --- Service Worker ---
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
                 console.log('[Service Worker Debug] Attempting to register service worker.');
-                console.log('[Service Worker Debug] Current protocol:', location.protocol); // Log the current protocol
-                console.log('[Service Worker Debug] Current origin:', location.origin);
-                console.log('[Service Worker Debug] Current href:', location.href);
+                console.log('[Service Worker Debug] Current protocol:', location.protocol);
                 const swPath = 'service-worker.js';
                 console.log('[Service Worker Debug] Service Worker script path:', swPath);
 
@@ -169,7 +177,7 @@
                             })
                             .catch(err => {
                                 console.error('[Service Worker] registration failed:', err);
-                                console.error('[Service Worker] Full error object:', err); // Log full error object
+                                console.error('[Service Worker] Full error object:', err);
                             });
                     } catch (e) {
                         console.error('[Service Worker] Direct registration call failed:', e);
@@ -189,6 +197,7 @@
 
         // --- Camera Setup ---
         async function setupCamera() {
+            console.log('[Camera Debug] Attempting to set up camera...');
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({
                     video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 480 } },
@@ -197,8 +206,11 @@
                 video.srcObject = stream;
                 return new Promise(resolve => {
                     video.onloadedmetadata = () => {
+                        console.log('[Camera Debug] Video metadata loaded. Playing video.');
                         video.play();
+                        video.classList.add('ready'); // Add class for green border
                         resizeCanvas();
+                        updateDebugInfo(); // Update debug info after video is ready
                         resolve(video);
                     };
                 });
@@ -206,33 +218,40 @@
                 console.error("Error accessing camera:", error);
                 statusEl.textContent = `❌ Camera access denied or not available. (${error.name})`;
                 statusEl.style.color = 'red';
+                updateDebugInfo(); // Update debug info on camera error
                 return null;
             }
         }
         function resizeCanvas() {
             canvas.width = video.videoWidth;
             canvas.height = video.videoHeight;
+            console.log(`[Canvas Debug] Canvas resized to: ${canvas.width}x${canvas.height}`);
         }
 
         // --- Object Detection ---
         const FRAMES_TO_SKIP = 2; // Process AI detection every 3rd frame (0, 1, 2 -> process 2)
         const PROXIMITY_THRESHOLD_HEIGHT = 450;
         async function detectFrame() {
-            if (video.readyState < 2) { requestAnimationFrame(detectFrame); return; } // Wait for video to be ready
-            
-            // Only process frames when not in simulation
-            if (callSimulationOverlay.style.display !== 'none') { 
+            if (video.readyState < 2) { 
+                console.log('[DetectFrame Debug] Video not ready (state:', video.readyState, '). Skipping frame.');
                 requestAnimationFrame(detectFrame); 
                 return; 
             }
-
+            
             let predictions;
             try {
-                if (model) predictions = await model.detect(video);
-                else { requestAnimationFrame(detectFrame); return; } // Model not loaded yet
+                if (model) {
+                    predictions = await model.detect(video);
+                    console.log('[DetectFrame Debug] Model detected predictions:', predictions.length);
+                } else { 
+                    console.log('[DetectFrame Debug] Model not loaded yet. Skipping frame.');
+                    requestAnimationFrame(detectFrame); 
+                    return; 
+                }
             } catch (e) { 
                 console.error("Error during model detection:", e);
-                requestAnimationFrame(detectFrame); return; 
+                requestAnimationFrame(detectFrame); 
+                return; 
             }
 
             tf.tidy(() => { // Use tf.tidy for memory management
@@ -274,26 +293,21 @@
         // --- Speech Synthesis ---
         async function speak(text, type = 'fullInfo') {
             console.log(`[TTS Debug] Attempting to speak (${type}): "${text}"`);
+            updateDebugInfo(); // Update debug info on speak attempt
 
-            if (isMuted && type !== 'emergency') {
+            if (isMuted) { // Simplified: no special 'emergency' type handling for muting
                 console.log(`[TTS Debug] Speech (${type}) blocked: Muted.`);
                 return;
             }
-            // Allow "emergency" type speech to always go through if it's the only one.
-            // Other types apply cooldown and busy checks.
-            if (type !== 'emergency' && (speaking || (Date.now() - (type === 'warning' ? lastWarningSpeechTime : lastFullInfoSpeechTime) < (type === 'warning' ? SPEECH_COOLDOWN_WARNING : SPEECH_COOLDOWN_FULL_INFO)))) {
+            
+            if (speaking || (Date.now() - (type === 'warning' ? lastWarningSpeechTime : lastFullInfoSpeechTime) < (type === 'warning' ? SPEECH_COOLDOWN_WARNING : SPEECH_COOLDOWN_FULL_INFO))) {
                 console.log(`[TTS Debug] Speech (${type}) blocked due to cooldown or already speaking.`);
                 return;
             }
 
-            // Always cancel any ongoing speech for emergency commands, or if a non-emergency
-            // speech is requested and something else is already speaking.
             if (speechSynthesis.speaking) {
-                // If it's an emergency type, or if it's a non-emergency type but something is already speaking, cancel.
-                if (type === 'emergency' || (type !== 'emergency' && speaking)) { 
-                    speechSynthesis.cancel();
-                    console.log("[TTS Debug] Cancelled ongoing speech.");
-                }
+                speechSynthesis.cancel();
+                console.log("[TTS Debug] Cancelled ongoing speech.");
             }
 
             const voices = speechSynthesis.getVoices();
@@ -317,17 +331,20 @@
             utterance.rate = 1.0; utterance.pitch = 1.0; utterance.volume = 1.0;
             
             return new Promise(resolve => {
-                utterance.onstart = () => { speaking = true; console.log("[TTS Debug] Speech started."); };
+                utterance.onstart = () => { speaking = true; updateDebugInfo(); console.log("[TTS Debug] Speech started."); };
                 utterance.onend = () => {
                     speaking = false;
                     if (type === 'fullInfo') lastFullInfoSpeechTime = Date.now();
                     else if (type === 'warning') lastWarningSpeechTime = Date.now();
+                    updateDebugInfo(); // Update debug info on speech end
                     console.log("[TTS Debug] Speech ended.");
                     resolve();
                 };
                 utterance.onerror = (event) => { 
                     console.error('[TTS Debug] SpeechSynthesisUtterance.onerror:', event.error, event); 
-                    speaking = false; resolve(); 
+                    speaking = false; 
+                    updateDebugInfo(); // Update debug info on speech error
+                    resolve(); 
                 };
                 speechSynthesis.speak(utterance);
             });
@@ -338,8 +355,9 @@
         }
 
         function speakFullInformation() {
-            // Only speak if not in simulation AND if in IDLE state (not processing Gemini)
-            if (currentRecognitionState === 'IDLE' && callSimulationOverlay.style.display === 'none') { 
+            console.log('[SpeakFullInfo Debug] Attempting to speak full information.');
+            // Only speak if in IDLE state (not processing Gemini)
+            if (currentRecognitionState === 'IDLE') { 
                 const combinedText = `
                     Status: ${stripEmojis(statusEl.textContent)}.
                     Weather: ${stripEmojis(weatherEl.textContent)}.
@@ -350,12 +368,17 @@
                 if (combinedText !== lastSpokenFullInfo) {
                     speak(combinedText, 'fullInfo');
                     lastSpokenFullInfo = combinedText;
+                } else {
+                    console.log('[SpeakFullInfo Debug] Text is the same as last time, skipping speech.');
                 }
+            } else {
+                console.log(`[SpeakFullInfo Debug] Not speaking: currentRecognitionState is ${currentRecognitionState}.`);
             }
         }
 
         // --- Speech Recognition ---
         function setupSpeechRecognition() {
+            console.log('[SR Debug] Setting up Speech Recognition.');
             if (!SpeechRecognition) {
                 speechRecognitionStatusEl.innerHTML = "❌ Voice commands not supported.";
                 speechRecognitionStatusEl.style.color = 'red';
@@ -370,15 +393,22 @@
             recognition.onstart = () => { console.log('[SR Debug] Recognition started.'); };
             recognition.onend = () => {
                 console.log('[SR Debug] Recognition ended.');
-                // Only restart if not in simulation and should be continuous
-                if (currentRecognitionState === 'IDLE' && callSimulationOverlay.style.display === 'none' && recognition.continuous) {
-                    try { recognition.start(); } catch (e) { console.warn('[SR Debug] Failed to restart recognition:', e); }
+                // Only restart if should be continuous
+                if (currentRecognitionState === 'IDLE' && recognition.continuous) {
+                    try { 
+                        console.log('[SR Debug] Attempting to restart recognition.');
+                        recognition.start(); 
+                    } catch (e) { 
+                        console.warn('[SR Debug] Failed to restart recognition:', e); 
+                    }
+                } else {
+                    console.log(`[SR Debug] Not restarting recognition: currentRecognitionState is ${currentRecognitionState}.`);
                 }
             };
             recognition.onerror = (event) => {
                 console.error('[SR Debug] Recognition error:', event.error);
                 if (event.error === 'not-allowed') {
-                    speak("Microphone permission denied. Voice commands are disabled.", 'emergency');
+                    speak("Microphone permission denied. Voice commands are disabled.", 'fullInfo'); // Changed to fullInfo type
                     speechRecognitionStatusEl.innerHTML = "❌ Mic permission denied!";
                     speechRecognitionStatusEl.style.color = 'red';
                     recognition.continuous = false; // Stop trying
@@ -404,22 +434,21 @@
                     if (isFinal && currentRecognitionState === 'IDLE') {
                         if (transcript.includes("mute")) {
                             isMuted = true;
-                            await speak("Muted.", 'emergency');
+                            await speak("Muted.", 'fullInfo'); // Changed to fullInfo type
                             speechRecognitionStatusEl.innerHTML = `<i class="fas fa-microphone"></i> Muted | Listening for commands...`;
+                            updateDebugInfo();
                         } else if (transcript.includes("unmute")) {
                             isMuted = false;
-                            await speak("Unmuted.", 'emergency');
+                            await speak("Unmuted.", 'fullInfo'); // Changed to fullInfo type
                             speechRecognitionStatusEl.innerHTML = `<i class="fas fa-microphone"></i> Listening for commands...`;
+                            updateDebugInfo();
                         } else if (transcript.includes("describe scene") || transcript.includes("what do you see")) {
                              getSceneDescriptionFromGemini();
                         } else if (transcript.includes("emergency")) {
-                            // Speak the combined instruction and simulation message
-                            await speak(`Initiating simulated emergency call. For an actual direct emergency call, quickly press your phone's power button five times.`, 'emergency');
-                            
-                            // Stop core app functions and show simulation
-                            showCallSimulation();
+                            // Removed emergency simulation, just speak a message
+                            await speak("Emergency feature is not active in this version.", 'fullInfo');
                         } else {
-                            // NEW: If no specific command, send to general Gemini assistant
+                            // If no specific command, send to general Gemini assistant
                             await askGemini(transcript);
                         }
                     }
@@ -428,6 +457,7 @@
         }
 
         function startContinuousRecognition() {
+            console.log('[SR Debug] Calling startContinuousRecognition. Current state:', currentRecognitionState);
             if (recognition && currentRecognitionState === 'IDLE') {
                 try {
                     recognition.continuous = true;
@@ -438,6 +468,8 @@
                 } catch (e) {
                     console.warn('[SR Debug] Recognition start failed:', e);
                 }
+            } else {
+                console.log('[SR Debug] Recognition not started: recognition object not ready or state not IDLE.');
             }
         }
 
@@ -448,12 +480,13 @@
                 return;
             }
             currentRecognitionState = 'PROCESSING_GEMINI';
+            updateDebugInfo(); // Update debug info on state change
             clearInterval(fullInfoIntervalId); // Pause periodic info
             if (recognition) { recognition.stop(); } // Stop continuous listening
             speechSynthesis.cancel(); // Cancel any existing speech
             
             speechRecognitionStatusEl.innerHTML = '<i class="fas fa-microchip"></i> Generating description...';
-            await speak("Generating scene description, please wait...", 'emergency'); // Emergency type to bypass mute
+            await speak("Generating scene description, please wait...", 'fullInfo'); // Changed to fullInfo type
 
             try {
                 const objects = window.detectedObjectsForGemini || [];
@@ -505,14 +538,15 @@
                 }
                 
                 console.log("[Gemini] Received description:", geminiDescription);
-                await speak(geminiDescription, 'emergency'); // Speak the description
+                await speak(geminiDescription, 'fullInfo'); // Changed to fullInfo type
 
             } catch (error) {
                 console.error("[Gemini] Error generating scene description:", error);
-                await speak("Failed to get scene description. Please check internet connection.", 'emergency');
+                await speak("Failed to get scene description. Please check internet connection.", 'fullInfo'); // Changed to fullInfo type
             } finally {
                 setTimeout(() => {
                     currentRecognitionState = 'IDLE';
+                    updateDebugInfo(); // Update debug info on state change
                     startContinuousRecognition();
                     clearInterval(fullInfoIntervalId); 
                     fullInfoIntervalId = setInterval(speakFullInformation, SPEECH_COOLDOWN_FULL_INFO);
@@ -529,6 +563,7 @@
             }
 
             currentRecognitionState = 'PROCESSING_GEMINI_ASSISTANT'; // New state for general assistant
+            updateDebugInfo(); // Update debug info on state change
             clearInterval(fullInfoIntervalId); // Pause periodic info
             if (recognition) {
                 recognition.stop(); // Stop continuous listening
@@ -536,7 +571,7 @@
             speechSynthesis.cancel(); // Cancel any existing speech
 
             speechRecognitionStatusEl.innerHTML = '<i class="fas fa-microchip"></i> Thinking...';
-            await speak("Thinking...", 'emergency'); // Provide feedback
+            await speak("Thinking...", 'fullInfo'); // Changed to fullInfo type
 
             try {
                 let chatHistory = [];
@@ -566,15 +601,16 @@
                 }
                 
                 console.log("[Gemini Assistant] Received response:", geminiResponse);
-                await speak(geminiResponse, 'emergency'); // Speak the response
+                await speak(geminiResponse, 'fullInfo'); // Changed to fullInfo type
 
             } catch (error) {
                 console.error("[Gemini Assistant] Error asking Gemini:", error);
-                await speak("I encountered an error. Please check your internet connection.", 'emergency');
+                await speak("I encountered an error. Please check your internet connection.", 'fullInfo'); // Changed to fullInfo type
             } finally {
                 // Ensure recognition and periodic info resume after a short delay to let speech finish
                 setTimeout(() => {
                     currentRecognitionState = 'IDLE';
+                    updateDebugInfo(); // Update debug info on state change
                     startContinuousRecognition();
                     clearInterval(fullInfoIntervalId); 
                     fullInfoIntervalId = setInterval(speakFullInformation, SPEECH_COOLDOWN_FULL_INFO);
@@ -583,56 +619,23 @@
             }
         }
 
-
-        // --- Call Simulation Functions ---
-        function showCallSimulation() {
-            // Hide all standard UI elements
-            uiElementsToHide.forEach(el => el.classList.add('hidden'));
-            
-            // Show the call simulation overlay
-            callSimulationOverlay.style.display = 'flex'; 
-            console.log(`[Simulation] Call simulation started for ${CALL_SIMULATION_DURATION / 1000} seconds.`);
-
-            // Set timeout to automatically hide the simulation
-            callSimulationTimeoutId = setTimeout(hideCallSimulation, CALL_SIMULATION_DURATION);
-        }
-
-        function hideCallSimulation() {
-            clearTimeout(callSimulationTimeoutId); // Clear any pending automatic hide
-            callSimulationOverlay.style.display = 'none'; // Hide the overlay
-            console.log("[Simulation] Call simulation ended.");
-            
-            // Show all standard UI elements
-            uiElementsToHide.forEach(el => el.classList.remove('hidden'));
-
-            // Resume main app functionalities
-            startContinuousRecognition(); // Resume speech recognition
-            clearInterval(fullInfoIntervalId); // Clear old interval if it's running
-            fullInfoIntervalId = setInterval(speakFullInformation, SPEECH_COOLDOWN_FULL_INFO); // Start periodic info speaking
-            console.log("[Simulation] App functionalities resumed.");
-        }
-
-        // Add event listener to the overlay to hide it on any tap/click
-        callSimulationOverlay.addEventListener('click', hideCallSimulation);
-
-
         // --- Initial App Load Function ---
         async function main() {
+            console.log('[Main] App starting...');
             statusEl.textContent = "🔄 Loading AI model... SafeVision";
+            updateDebugInfo(); // Initial debug info update
             
             // First, wait for SpeechSynthesis voices to be ready
+            console.log('[Main] Waiting for SpeechSynthesis voices...');
             await new Promise(resolve => {
-                // If voices are already loaded, resolve immediately
                 if (speechSynthesis.getVoices().length > 0) {
                     console.log("[Main] Voices available immediately.");
                     resolve();
                 } else {
-                    // Otherwise, wait for the voiceschanged event
                     speechSynthesis.onvoiceschanged = () => {
                         console.log("[Main] Voices loaded via onvoiceschanged event.");
                         resolve();
                     };
-                    // Fallback in case voiceschanged doesn't fire immediately
                     setTimeout(() => {
                         if (speechSynthesis.getVoices().length === 0) {
                             console.warn("[Main] Voices not loaded after 2s timeout. Proceeding anyway, but speech might be silent.");
@@ -643,26 +646,41 @@
                     }, 2000); // 2 second fallback timeout
                 }
             });
+            console.log('[Main] SpeechSynthesis voices ready (or timeout reached).');
 
             // Proceed with camera and model setup after voices are ready (or attempted)
+            console.log('[Main] Setting up camera...');
             await setupCamera();
-            if (!video.srcObject) return; // Exit if camera failed
+            if (!video.srcObject) {
+                console.error('[Main] Camera setup failed. Exiting main function.');
+                return; // Exit if camera failed
+            }
+            console.log('[Main] Camera setup complete.');
 
+            console.log('[Main] Loading COCO-SSD model...');
             model = await cocoSsd.load({base: 'lite_mobilenet_v2'});
             statusEl.textContent = "✅ AI model loaded!";
+            updateDebugInfo(); // Update debug info after model is loaded
             console.log("[Main] AI model loaded. Initializing speech recognition.");
 
             // THIS IS THE LINE THAT SAYS "WELCOME TO SAFEVISION"
+            console.log('[Main] Speaking "Welcome to SafeVision."');
             await speak("Welcome to SafeVision.", 'fullInfo'); 
+            console.log('[Main] "Welcome to SafeVision" spoken.');
 
+            console.log('[Main] Setting up Speech Recognition...');
             setupSpeechRecognition();
+            console.log('[Main] Starting continuous recognition...');
             startContinuousRecognition();
             
-            speakFullInformation();
+            console.log('[Main] Starting periodic full information speaking...');
+            speakFullInformation(); // Initial call to speak full info after welcome
             fullInfoIntervalId = setInterval(speakFullInformation, SPEECH_COOLDOWN_FULL_INFO);
             console.log("[Main] Periodic full information speaking started.");
             
+            console.log('[Main] Starting object detection loop...');
             detectFrame(); // Start the continuous object detection loop
+            console.log('[Main] App initialization complete.');
         }
 
         // Start the application once the DOM is fully loaded
