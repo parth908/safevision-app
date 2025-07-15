@@ -123,7 +123,7 @@
     <script>
         // --- DOM Elements ---
         const video = document.getElementById("video");
-        const canvas = document = document.getElementById("canvas");
+        const canvas = document.getElementById("canvas"); 
         const ctx = canvas.getContext("2d");
         const statusEl = document.getElementById("status");
         const weatherEl = document.getElementById("weather");
@@ -216,7 +216,7 @@
                 });
             } catch (error) {
                 console.error("Error accessing camera:", error);
-                statusEl.textContent = `❌ Camera access denied or not available. (${error.name})`;
+                statusEl.textContent = `Camera access denied or not available. (${error.name})`; // Removed emoji
                 statusEl.style.color = 'red';
                 updateDebugInfo(); // Update debug info on camera error
                 return null;
@@ -258,7 +258,7 @@
                 ctx.clearRect(0, 0, canvas.width, canvas.height); // Clear previous drawings
                 
                 let personDetected = false;
-                let detectedObjectsText = "👁️ No objects detected.";
+                let detectedObjectsText = "No objects detected."; // Removed emoji
                 window.detectedObjectsForGemini = []; // Reset for new frame
 
                 predictions.forEach(pred => {
@@ -268,7 +268,7 @@
                         ctx.fillStyle = "#00FF00"; ctx.font = '16px sans-serif';
                         ctx.fillText(`${pred.class} (${Math.round(pred.score * 100)}%)`, x, y > 10 ? y - 5 : 10);
                         
-                        detectedObjectsText = `👁️ I see a ${pred.class}`; // Update display text
+                        detectedObjectsText = `I see a ${pred.class}`; // Removed emoji from display text
                         window.detectedObjectsForGemini.push({ // Store for Gemini
                             class: pred.class, score: pred.score, bbox: { x, y, width, height }
                         });
@@ -284,18 +284,24 @@
                     }
                 });
                 objectEl.textContent = detectedObjectsText;
-                proximityStatusEl.textContent = personDetected ? "🟢 Person detected" : "🟢 No person detected";
+                proximityStatusEl.textContent = personDetected ? "Person detected" : "No person detected"; // Removed emoji from display text
             }); // End tf.tidy
 
             requestAnimationFrame(detectFrame);
         }
 
         // --- Speech Synthesis ---
+        function stripEmojis(text) {
+            // Regex to remove common emoji ranges and symbols
+            return text.replace(/(\u00a9|\u00ae|[\u2000-\u3300]|\ud83c[\ud000-\udfff]|\ud83d[\ud000-\udfff]|\ud83e[\ud000-\udfff])/g, '');
+        }
+
         async function speak(text, type = 'fullInfo') {
-            console.log(`[TTS Debug] Attempting to speak (${type}): "${text}"`);
+            const cleanedText = stripEmojis(text); // Always strip emojis before speaking
+            console.log(`[TTS Debug] Attempting to speak (${type}): "${cleanedText}"`);
             updateDebugInfo(); // Update debug info on speak attempt
 
-            if (isMuted) { // Simplified: no special 'emergency' type handling for muting
+            if (isMuted) { 
                 console.log(`[TTS Debug] Speech (${type}) blocked: Muted.`);
                 return;
             }
@@ -313,12 +319,12 @@
             const voices = speechSynthesis.getVoices();
             if (!voices.length) {
                 console.warn("[TTS Debug] No speech synthesis voices available on this device.");
-                statusEl.textContent = "❌ Speech not available (no voices)";
+                statusEl.textContent = "Speech not available (no voices, trying anyway)"; // Removed emoji
                 statusEl.style.color = 'red';
                 return;
             }
 
-            const utterance = new SpeechSynthesisUtterance(text);
+            const utterance = new SpeechSynthesisUtterance(cleanedText);
             utterance.lang = "en-IN";
             const indianVoice = voices.find(voice => voice.lang === 'en-IN' || voice.lang === 'en-GB' || voice.name.includes('India'));
             if (indianVoice) {
@@ -350,20 +356,17 @@
             });
         }
 
-        function stripEmojis(text) {
-            return text.replace(/(\u00a9|\u00ae|[\u2000-\u3300]|\ud83c[\ud000-\udfff]|\ud83d[\ud000-\udfff]|\ud83e[\ud000-\udfff])/g, '');
-        }
-
         function speakFullInformation() {
             console.log('[SpeakFullInfo Debug] Attempting to speak full information.');
             // Only speak if in IDLE state (not processing Gemini)
             if (currentRecognitionState === 'IDLE') { 
+                // Emojis are removed by stripEmojis within the speak function itself now
                 const combinedText = `
-                    Status: ${stripEmojis(statusEl.textContent)}.
-                    Weather: ${stripEmojis(weatherEl.textContent)}.
-                    Date and Time: ${stripEmojis(datetimeEl.textContent)}.
-                    Object detection: ${stripEmojis(objectEl.textContent)}.
-                    Proximity status: ${stripEmojis(proximityStatusEl.textContent)}.
+                    Status: ${statusEl.textContent}.
+                    Weather: ${weatherEl.textContent}.
+                    Date and Time: ${datetimeEl.textContent}.
+                    Object detection: ${objectEl.textContent}.
+                    Proximity status: ${proximityStatusEl.textContent}.
                 `.replace(/\s+/g, ' ').trim();
                 if (combinedText !== lastSpokenFullInfo) {
                     speak(combinedText, 'fullInfo');
@@ -379,21 +382,30 @@
         // --- Speech Recognition ---
         function setupSpeechRecognition() {
             console.log('[SR Debug] Setting up Speech Recognition.');
-            if (!SpeechRecognition) {
-                speechRecognitionStatusEl.innerHTML = "❌ Voice commands not supported.";
+            // Check for SpeechRecognition API compatibility
+            const SpeechRecognitionAPI = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+            if (!SpeechRecognitionAPI) {
+                speechRecognitionStatusEl.innerHTML = "Voice commands not supported by your browser."; 
                 speechRecognitionStatusEl.style.color = 'red';
-                console.warn("Web Speech API (SpeechRecognition) not supported.");
+                console.warn("Web Speech API (SpeechRecognition) not supported by this browser.");
+                // Disable any further attempts to use recognition
+                recognition = null; // Ensure recognition object is null
                 return;
             }
-            recognition = new SpeechRecognition();
+            
+            recognition = new SpeechRecognitionAPI(); // Use the detected API
             recognition.continuous = true;
             recognition.interimResults = true;
             recognition.lang = 'en-IN';
 
-            recognition.onstart = () => { console.log('[SR Debug] Recognition started.'); };
+            recognition.onstart = () => { 
+                console.log('[SR Debug] Recognition started.'); 
+                speechRecognitionStatusEl.innerHTML = `<i class="fas fa-microphone"></i> Listening...`;
+            };
             recognition.onend = () => {
                 console.log('[SR Debug] Recognition ended.');
-                // Only restart if should be continuous
+                // Only restart if should be continuous and not in an active Gemini state
                 if (currentRecognitionState === 'IDLE' && recognition.continuous) {
                     try { 
                         console.log('[SR Debug] Attempting to restart recognition.');
@@ -402,20 +414,20 @@
                         console.warn('[SR Debug] Failed to restart recognition:', e); 
                     }
                 } else {
-                    console.log(`[SR Debug] Not restarting recognition: currentRecognitionState is ${currentRecognitionState}.`);
+                    console.log(`[SR Debug] Not restarting recognition: currentRecognitionState is ${currentRecognitionState} or recognition is not continuous.`);
                 }
             };
             recognition.onerror = (event) => {
                 console.error('[SR Debug] Recognition error:', event.error);
                 if (event.error === 'not-allowed') {
-                    speak("Microphone permission denied. Voice commands are disabled.", 'fullInfo'); // Changed to fullInfo type
-                    speechRecognitionStatusEl.innerHTML = "❌ Mic permission denied!";
+                    speak("Microphone permission denied. Voice commands are disabled.", 'fullInfo'); 
+                    speechRecognitionStatusEl.innerHTML = "Mic permission denied!"; 
                     speechRecognitionStatusEl.style.color = 'red';
-                    recognition.continuous = false; // Stop trying
+                    recognition.continuous = false; // Stop trying to restart
                 } else if (event.error === 'no-speech') {
                     console.log('[SR Debug] No speech detected.');
                 }
-                // recognition.onend will handle restart if continuous.
+                // recognition.onend will handle restart if continuous, unless 'not-allowed'
             };
 
             recognition.onresult = async (event) => {
@@ -434,12 +446,12 @@
                     if (isFinal && currentRecognitionState === 'IDLE') {
                         if (transcript.includes("mute")) {
                             isMuted = true;
-                            await speak("Muted.", 'fullInfo'); // Changed to fullInfo type
+                            await speak("Muted.", 'fullInfo'); 
                             speechRecognitionStatusEl.innerHTML = `<i class="fas fa-microphone"></i> Muted | Listening for commands...`;
                             updateDebugInfo();
                         } else if (transcript.includes("unmute")) {
                             isMuted = false;
-                            await speak("Unmuted.", 'fullInfo'); // Changed to fullInfo type
+                            await speak("Unmuted.", 'fullInfo'); 
                             speechRecognitionStatusEl.innerHTML = `<i class="fas fa-microphone"></i> Listening for commands...`;
                             updateDebugInfo();
                         } else if (transcript.includes("describe scene") || transcript.includes("what do you see")) {
@@ -458,7 +470,7 @@
 
         function startContinuousRecognition() {
             console.log('[SR Debug] Calling startContinuousRecognition. Current state:', currentRecognitionState);
-            if (recognition && currentRecognitionState === 'IDLE') {
+            if (recognition && currentRecognitionState === 'IDLE') { // Ensure recognition object exists
                 try {
                     recognition.continuous = true;
                     recognition.interimResults = true;
@@ -469,7 +481,7 @@
                     console.warn('[SR Debug] Recognition start failed:', e);
                 }
             } else {
-                console.log('[SR Debug] Recognition not started: recognition object not ready or state not IDLE.');
+                console.log('[SR Debug] Recognition not started: recognition object not available or state not IDLE.');
             }
         }
 
@@ -485,8 +497,8 @@
             if (recognition) { recognition.stop(); } // Stop continuous listening
             speechSynthesis.cancel(); // Cancel any existing speech
             
-            speechRecognitionStatusEl.innerHTML = '<i class="fas fa-microchip"></i> Generating description...';
-            await speak("Generating scene description, please wait...", 'fullInfo'); // Changed to fullInfo type
+            speechRecognitionStatusEl.innerHTML = 'Generating description...'; // Removed emoji
+            await speak("Generating scene description, please wait.", 'fullInfo'); 
 
             try {
                 const objects = window.detectedObjectsForGemini || [];
@@ -538,11 +550,11 @@
                 }
                 
                 console.log("[Gemini] Received description:", geminiDescription);
-                await speak(geminiDescription, 'fullInfo'); // Changed to fullInfo type
+                await speak(geminiDescription, 'fullInfo'); 
 
             } catch (error) {
                 console.error("[Gemini] Error generating scene description:", error);
-                await speak("Failed to get scene description. Please check internet connection.", 'fullInfo'); // Changed to fullInfo type
+                await speak("Failed to get scene description. Please check internet connection.", 'fullInfo'); 
             } finally {
                 setTimeout(() => {
                     currentRecognitionState = 'IDLE';
@@ -570,8 +582,8 @@
             }
             speechSynthesis.cancel(); // Cancel any existing speech
 
-            speechRecognitionStatusEl.innerHTML = '<i class="fas fa-microchip"></i> Thinking...';
-            await speak("Thinking...", 'fullInfo'); // Changed to fullInfo type
+            speechRecognitionStatusEl.innerHTML = 'Thinking...'; // Removed emoji
+            await speak("Thinking.", 'fullInfo'); 
 
             try {
                 let chatHistory = [];
@@ -601,11 +613,11 @@
                 }
                 
                 console.log("[Gemini Assistant] Received response:", geminiResponse);
-                await speak(geminiResponse, 'fullInfo'); // Changed to fullInfo type
+                await speak(geminiResponse, 'fullInfo'); 
 
             } catch (error) {
                 console.error("[Gemini Assistant] Error asking Gemini:", error);
-                await speak("I encountered an error. Please check your internet connection.", 'fullInfo'); // Changed to fullInfo type
+                await speak("I encountered an error. Please check your internet connection.", 'fullInfo'); 
             } finally {
                 // Ensure recognition and periodic info resume after a short delay to let speech finish
                 setTimeout(() => {
@@ -619,10 +631,11 @@
             }
         }
 
+
         // --- Initial App Load Function ---
         async function main() {
             console.log('[Main] App starting...');
-            statusEl.textContent = "🔄 Loading AI model... SafeVision";
+            statusEl.textContent = "Loading AI model... SafeVision"; 
             updateDebugInfo(); // Initial debug info update
             
             // First, wait for SpeechSynthesis voices to be ready
@@ -639,7 +652,7 @@
                     setTimeout(() => {
                         if (speechSynthesis.getVoices().length === 0) {
                             console.warn("[Main] Voices not loaded after 2s timeout. Proceeding anyway, but speech might be silent.");
-                            statusEl.textContent = "❌ Speech not ready (no voices, trying anyway)";
+                            statusEl.textContent = "Speech not ready (no voices, trying anyway)"; 
                             statusEl.style.color = 'orange';
                         }
                         resolve();
@@ -659,7 +672,7 @@
 
             console.log('[Main] Loading COCO-SSD model...');
             model = await cocoSsd.load({base: 'lite_mobilenet_v2'});
-            statusEl.textContent = "✅ AI model loaded!";
+            statusEl.textContent = "AI model loaded!"; 
             updateDebugInfo(); // Update debug info after model is loaded
             console.log("[Main] AI model loaded. Initializing speech recognition.");
 
