@@ -1,69 +1,401 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>SafeVision</title>
-  <link rel="manifest" href="manifest.json" />
-  <link rel="stylesheet" href="style.css" />
+    <meta charset="UTF-8" />
+    <title>SafeVision V2</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#000000">
+    <link rel="apple-touch-icon" href="icon-192.png">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <style>
+        html, body {
+            margin: 0; padding: 0; width: 100vw; height: 100vh; overflow: hidden;
+        }
+        body {
+            font-family: sans-serif; background-color: #000; color: #fff; display: flex; justify-content: center; align-items: center; position: relative;
+        }
+        video, canvas {
+            position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; object-fit: cover; z-index: 0; border: 2px solid transparent; 
+        }
+        video.ready { border: 2px solid limegreen; }
+        #info {
+            position: absolute; top: 10px; left: 10px; text-align: left; background-color: rgba(0, 0, 0, 0.7); padding: 10px; border-radius: 8px; z-index: 2; font-size: 0.9em;
+        }
+        .warning-text { color: red; font-weight: bold; }
+        #speechRecognitionStatus {
+            position: absolute; top: 10px; right: 10px; background-color: rgba(0,0,0,0.7); padding: 8px 12px; border-radius: 8px; color: yellow; font-size: 0.9em; display: flex; align-items: center; gap: 5px; z-index: 3;
+        }
+        #speechRecognitionStatus .fas { animation: pulse 1.5s infinite; }
+        @keyframes pulse {
+            0% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.1); opacity: 0.8; } 100% { transform: scale(1); opacity: 1; }
+        }
+        .hidden { display: none !important; }
+        #debugInfo {
+            position: absolute; bottom: 10px; left: 10px; background-color: rgba(0, 0, 0, 0.7); padding: 10px; border-radius: 8px; z-index: 4; font-size: 0.8em; color: #0f0; text-align: left;
+        }
+        #detectionActivity {
+            position: absolute; bottom: 10px; right: 10px; width: 15px; height: 15px; background-color: red; border-radius: 50%; z-index: 4; opacity: 0.5;
+        }
+        #detectionActivity.active {
+            background-color: limegreen; animation: blink 1s infinite alternate;
+        }
+        @keyframes blink {
+            from { opacity: 1; } to { opacity: 0.3; }
+        }
+    </style>
 </head>
 <body>
-  <h1>Welcome to SafeVision</h1>
-  <button id="start-btn">Start Voice Detection</button>
-  <p id="status">Status: Idle</p>
+    <video id="video" class="ui-element" autoplay playsinline muted></video>
+    <canvas id="canvas" class="ui-element"></canvas>
+    <div id="info" class="ui-element">
+        <div id="status">🔄 Loading AI model...</div>
+        <div id="weather">🌡️ Temp: 35°C | 🌬️ Wind: 15 km/h | Sunny</div> 
+        <div id="datetime"></div>
+        <div id="object">👁️ Waiting for detection...</div>
+        <div id="proximityStatus" style="color: limegreen;">🟢 No person detected</div>
+    </div>
+    <div id="speechRecognitionStatus" class="ui-element">
+        <i class="fas fa-microphone"></i> Listening...
+    </div>
+    <div id="debugInfo" class="ui-element">
+        <div>State: <span id="debugState">IDLE</span></div>
+        <div>Speaking: <span id="debugSpeaking">false</span></div>
+        <div>Muted: <span id="debugMuted">false</span></div>
+        <div>Video Ready: <span id="debugVideoReady">false</span></div>
+        <div>Model Loaded: <span id="debugModelLoaded">false</span></div>
+        <div>Voices (Native): <span id="debugVoiceCount">0</span></div>
+        <div>ResponsiveVoice: <span id="debugResponsiveVoiceStatus">Loading...</span></div>
+    </div>
+    <div id="detectionActivity"></div>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
+    <script src="https://code.responsivevoice.org/responsivevoice.js?key=YOUR_API_KEY"></script> 
+    <script>
+        // --- DOM Elements ---
+        const video = document.getElementById("video");
+        const canvas = document.getElementById("canvas"); 
+        const ctx = canvas.getContext("2d");
+        const statusEl = document.getElementById("status");
+        const weatherEl = document.getElementById("weather");
+        const datetimeEl = document.getElementById("datetime");
+        const objectEl = document.getElementById("object");
+        const proximityStatusEl = document.getElementById("proximityStatus");
+        const speechRecognitionStatusEl = document.getElementById("speechRecognitionStatus");
+        const debugStateEl = document.getElementById('debugState');
+        const debugSpeakingEl = document.getElementById('debugSpeaking');
+        const debugMutedEl = document.getElementById('debugMuted'); 
+        const debugVideoReadyEl = document.getElementById('debugVideoReady');
+        const debugModelLoadedEl = document.getElementById('debugModelLoaded');
+        const debugVoiceCountEl = document.getElementById('debugVoiceCount'); 
+        const debugResponsiveVoiceStatusEl = document.getElementById('debugResponsiveVoiceStatus');
+        const detectionActivityEl = document.getElementById('detectionActivity'); 
+        const uiElementsToHide = document.querySelectorAll('.ui-element');
 
-  <script>
-    const startBtn = document.getElementById("start-btn");
-    const status = document.getElementById("status");
+        // --- Variables ---
+        let model, recognition, fullInfoIntervalId, objectAnnouncementIntervalId;
+        let speaking = false;
+        let isMuted = false;
+        let lastSpokenObject = "";
+        const OBJECT_ANNOUNCEMENT_COOLDOWN = 10000;
+        const SPEECH_COOLDOWN_DYNAMIC_INFO = 30000;
+        const SPEECH_COOLDOWN_WARNING = 3000;
+        let lastWarningSpeechTime = 0;
+        const PROXIMITY_THRESHOLD_HEIGHT = 380;
+        let currentRecognitionState = 'IDLE';
+        let currentProximityWarningActive = false;
+        let speechTemporarilyStoppedByUser = false;
 
-    const emergencyNumber = "112"; // India's emergency number
 
-    // Check browser support
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    const recognition = new SpeechRecognition();
+        // --- Debug UI Update Function ---
+        function updateDebugInfo() {
+            debugStateEl.textContent = currentRecognitionState;
+            debugSpeakingEl.textContent = speaking;
+            debugMutedEl.textContent = isMuted;
+            debugVideoReadyEl.textContent = video.readyState >= 2; 
+            debugModelLoadedEl.textContent = !!model; 
+            debugVoiceCountEl.textContent = speechSynthesis.getVoices().length; 
+            debugResponsiveVoiceStatusEl.textContent = typeof responsiveVoice !== 'undefined' && typeof responsiveVoice.enabled === 'function' && responsiveVoice.enabled() ? 'Ready' : 'Not Ready'; 
+            console.log(`[Debug Info Update] State: ${currentRecognitionState}, Speaking: ${speaking}, Muted: ${isMuted}, Video Ready: ${video.readyState >= 2}, Model Loaded: ${!!model}, Voices (Native): ${speechSynthesis.getVoices().length}, ResponsiveVoice: ${debugResponsiveVoiceStatusEl.textContent}`);
+        }
 
-    recognition.lang = "en-IN";
-    recognition.continuous = true;
-    recognition.interimResults = false;
+        // --- Service Worker ---
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                if (location.protocol === 'https:' || location.protocol === 'http:') {
+                    try {
+                        navigator.serviceWorker.register('service-worker.js').then(registration => {
+                            console.log('[Service Worker] registered! Scope:', registration.scope);
+                        }).catch(err => {
+                            console.error('[Service Worker] registration failed:', err);
+                        });
+                    } catch (e) {
+                        console.error('[Service Worker] Direct registration call failed:', e);
+                    }
+                } else {
+                    console.warn('[Service Worker] Not registering service worker: Unsupported protocol');
+                }
+            });
+        }
 
-    recognition.onstart = () => {
-      status.textContent = "Status: Listening...";
-    };
+        // --- Date & Time ---
+        function updateDateTime() {
+            const now = new Date();
+            datetimeEl.textContent = `📅 ${now.toDateString()} | ⏰ ${now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`;
+        }
+        setInterval(updateDateTime, 1000); updateDateTime(); 
 
-    recognition.onend = () => {
-      status.textContent = "Status: Stopped. Click start again.";
-    };
+        // --- Camera Setup ---
+        async function setupCamera() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 480 } }, audio: false
+                });
+                video.srcObject = stream;
+                return new Promise(resolve => {
+                    video.onloadedmetadata = () => {
+                        video.play();
+                        video.classList.add('ready'); 
+                        resizeCanvas();
+                        updateDebugInfo(); 
+                        resolve(video);
+                    };
+                });
+            } catch (error) {
+                console.error("Error accessing camera:", error);
+                statusEl.textContent = `Camera access denied or not available. (${error.name})`; 
+                statusEl.style.color = 'red';
+                updateDebugInfo(); 
+                return null;
+            }
+        }
+        function resizeCanvas() {
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+        }
 
-    recognition.onresult = (event) => {
-      const transcript = event.results[event.results.length - 1][0].transcript.trim().toLowerCase();
-      console.log("Heard:", transcript);
-      if (transcript.includes("emergency")) {
-        speak("Emergency detected. Calling 112 now.");
-        // Trigger actual call
-        window.location.href = "tel:" + emergencyNumber;
-      }
-    };
+        // --- Object Detection ---
+        async function detectFrame() {
+            detectionActivityEl.classList.add('active');
+            if (video.readyState < 2 || !model) {
+                detectionActivityEl.classList.remove('active');
+                requestAnimationFrame(detectFrame);
+                return;
+            }
 
-    function speak(text) {
-      const synth = window.speechSynthesis;
-      const utter = new SpeechSynthesisUtterance(text);
-      utter.lang = "en-IN";
-      synth.speak(utter);
-    }
+            let predictions;
+            try {
+                predictions = await model.detect(video);
+            } catch (e) {
+                console.error("Error during model detection:", e);
+                detectionActivityEl.classList.remove('active');
+                requestAnimationFrame(detectFrame);
+                return;
+            }
 
-    startBtn.onclick = () => {
-      recognition.start();
-    };
-  </script>
+            tf.tidy(() => {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                let personDetectedAndCloseThisFrame = false;
+                let detectedObjectsText = "No objects detected.";
+                let mostProminentObject = null;
+                let highestScore = 0;
 
-  <script>
-    // Register service worker
-    if ("serviceWorker" in navigator) {
-      navigator.serviceWorker
-        .register("service-worker.js")
-        .then((reg) => console.log("Service Worker Registered", reg))
-        .catch((err) => console.error("Service Worker Error", err));
-    }
-  </script>
+                predictions.forEach(pred => {
+                    if (pred.score > 0.6) {
+                        const [x, y, width, height] = pred.bbox;
+                        ctx.strokeStyle = "#00FF00"; ctx.lineWidth = 2; ctx.strokeRect(x, y, width, height);
+                        ctx.fillStyle = "#00FF00"; ctx.font = '16px sans-serif';
+                        ctx.fillText(`${pred.class} (${Math.round(pred.score * 100)}%)`, x, y > 10 ? y - 5 : 10);
+                        
+                        if (pred.score > highestScore) {
+                            highestScore = pred.score;
+                            mostProminentObject = pred.class;
+                        }
+
+                        if (pred.class === 'person' && height > PROXIMITY_THRESHOLD_HEIGHT) {
+                            personDetectedAndCloseThisFrame = true;
+                            ctx.strokeStyle = 'red'; ctx.lineWidth = 4; ctx.strokeRect(x, y, width, height);
+                            ctx.fillStyle = 'red'; ctx.fillText(`VERY CLOSE!`, x, y + height + 20);
+                            
+                            if (!currentProximityWarningActive && !isMuted && !speechTemporarilyStoppedByUser) {
+                                speak("Warning: Person very close.", 'warning');
+                            }
+                        }
+                    }
+                });
+
+                detectedObjectsText = mostProminentObject ? `I see a ${mostProminentObject}` : "No objects detected.";
+                objectEl.textContent = detectedObjectsText;
+                proximityStatusEl.textContent = personDetectedAndCloseThisFrame ? "Person detected and close" : "No close person detected";
+
+                if (!isMuted && !speechTemporarilyStoppedByUser && mostProminentObject && mostProminentObject !== lastSpokenObject) {
+                    speak(`I see a ${mostProminentObject}`);
+                    lastSpokenObject = mostProminentObject;
+                }
+
+                currentProximityWarningActive = personDetectedAndCloseThisFrame;
+            });
+            requestAnimationFrame(detectFrame);
+        }
+
+        // --- Speech Synthesis ---
+        function stripEmojis(text) {
+            return text.replace(/(\u00a9|\u00ae|[\u2000-\u3300]|\ud83c[\ud000-\udfff]|\ud83d[\ud000-\udfff]|\ud83e[\ud000-\udfff])/g, '');
+        }
+
+        function stopSpeaking() {
+            if (speechSynthesis.speaking) speechSynthesis.cancel();
+            if (typeof responsiveVoice !== 'undefined' && responsiveVoice.speaking()) responsiveVoice.cancel();
+            speaking = false;
+            updateDebugInfo();
+        }
+
+        async function speak(text, type = 'objectAnnounce') {
+            if (isMuted || speechTemporarilyStoppedByUser) {
+                console.log(`[Speak] Skipped speaking due to being muted or stopped by user. Text: "${text}"`);
+                return;
+            }
+
+            const cleanedText = stripEmojis(text);
+            stopSpeaking();
+            speaking = true;
+            updateDebugInfo();
+
+            return new Promise(resolve => {
+                const speechFinished = () => {
+                    speaking = false;
+                    updateDebugInfo();
+                    resolve();
+                };
+
+                const useNative = 'speechSynthesis' in window && speechSynthesis.getVoices().length > 0;
+                
+                if (useNative) {
+                    const utterance = new SpeechSynthesisUtterance(cleanedText);
+                    utterance.onend = speechFinished;
+                    utterance.onerror = (event) => {
+                        console.error('[Native Speech Error]', event.error);
+                        speechFinished(); 
+                    };
+                    speechSynthesis.speak(utterance);
+                } else if (typeof responsiveVoice !== 'undefined' && responsiveVoice.enabled()) {
+                    responsiveVoice.speak(cleanedText, "US English Female", { onend: speechFinished });
+                } else {
+                    console.warn("[Speak] No speech synthesis available.");
+                    speechFinished();
+                }
+            });
+        }
+        
+        // --- Speech Recognition ---
+        function setupSpeechRecognition() {
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            if (!SpeechRecognition) {
+                speechRecognitionStatusEl.textContent = 'Speech not supported';
+                console.error('Speech Recognition not supported in this browser.');
+                return;
+            }
+
+            recognition = new SpeechRecognition();
+            recognition.continuous = true;
+            recognition.interimResults = false;
+            recognition.lang = 'en-US';
+
+            recognition.onstart = () => {
+                currentRecognitionState = 'LISTENING';
+                speechRecognitionStatusEl.innerHTML = '<i class="fas fa-microphone"></i> Listening...';
+                console.log('[Speech Recognition] Started. Status:', currentRecognitionState);
+                updateDebugInfo();
+            };
+
+            recognition.onend = () => {
+                if (currentRecognitionState !== 'STOPPED' && currentRecognitionState !== 'PROCESSING_GEMINI' && currentRecognitionState !== 'PROCESSING_GEMINI_ASSISTANT') {
+                    currentRecognitionState = 'RESTARTING';
+                    console.log('[Speech Recognition] Ended. Restarting...');
+                    speechRecognitionStatusEl.innerHTML = 'Restarting...';
+                    recognition.start();
+                } else {
+                    currentRecognitionState = 'IDLE';
+                    speechRecognitionStatusEl.innerHTML = '<i class="fas fa-microphone-slash"></i> Stopped';
+                    console.log('[Speech Recognition] Stopped. Status:', currentRecognitionState);
+                }
+                updateDebugInfo();
+            };
+            
+            recognition.onerror = (event) => {
+                console.error('[Speech Recognition Error]', event.error);
+                if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+                    speechRecognitionStatusEl.innerHTML = '<i class="fas fa-exclamation-triangle"></i> Access Denied';
+                    currentRecognitionState = 'STOPPED';
+                    updateDebugInfo();
+                }
+            };
+
+            recognition.onresult = async (event) => {
+                const transcript = event.results[event.results.length - 1][0].transcript.trim().toLowerCase();
+                console.log('[Speech Recognition] Recognized command:', transcript);
+
+                if (transcript.includes('mute')) {
+                    isMuted = true;
+                    stopSpeaking();
+                    console.log('[Speech Command] Muted.');
+                    await speak("I have been muted.");
+                    console.log('[Speech Command] Mute confirmation spoken.');
+                    stopSpeaking();
+                } else if (transcript.includes('unmute')) {
+                    isMuted = false;
+                    console.log('[Speech Command] Unmuted.');
+                    await speak("I have been unmuted.");
+                } else if (transcript.includes('stop')) {
+                    speechTemporarilyStoppedByUser = true;
+                    stopSpeaking();
+                    console.log('[Speech Command] Stopped all speech.');
+                } else if (transcript.includes('start')) {
+                    speechTemporarilyStoppedByUser = false;
+                    console.log('[Speech Command] Resumed all speech.');
+                }
+            };
+        }
+
+        function startContinuousRecognition() {
+            if (recognition && currentRecognitionState !== 'LISTENING' && currentRecognitionState !== 'PROCESSING_GEMINI' && currentRecognitionState !== 'PROCESSING_GEMINI_ASSISTANT') {
+                recognition.start();
+            }
+        }
+        
+        function stopContinuousRecognition() {
+            if (recognition) {
+                currentRecognitionState = 'STOPPED';
+                recognition.stop();
+            }
+        }
+
+        // --- Main Initialization Function ---
+        async function main() {
+            console.log('[Main] App initialization started.');
+            await setupCamera();
+            statusEl.textContent = '🔄 Loading AI model...';
+
+            model = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
+            console.log('[Main] AI model loaded successfully.');
+            statusEl.textContent = '✅ AI model loaded!';
+            updateDebugInfo();
+
+            console.log('[Main] Speaking initial static information.');
+            await speak("Welcome to SafeVision. The date is " + new Date().toDateString() + ". The time is " + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ". The weather is 35 degrees, sunny with a gentle breeze. AI model loaded.", 'initial');
+            console.log('[Main] Initial static information spoken.');
+
+            console.log('[Main] Setting up Speech Recognition...');
+            setupSpeechRecognition();
+            console.log('[Main] Starting continuous recognition...');
+            startContinuousRecognition();
+            
+            console.log('[Main] Starting object detection loop...');
+            detectFrame(); 
+            console.log('[Main] App initialization complete.');
+        }
+
+        window.onload = main;
+    </script>
 </body>
 </html>
